@@ -626,6 +626,7 @@ export default function Home() {
               .filter(v => v.id > 0)
               .map(v => ({
                 id: v.id,
+                precoAtual: Number((v.preco > 0 ? v.preco : p.preco_venda).toFixed(2)),
                 precoPromocional: Number(((v.preco > 0 ? v.preco : p.preco_venda) * (1 - desconto / 100)).toFixed(2))
               }))
           : []
@@ -758,6 +759,7 @@ export default function Home() {
         nome: p.nome,
         sku: p.sku,
         catalogoId: p.catalogoId,
+        precoAtual: p.precoAtual,
         precoPromocional: p.precoPromocional,
         variacoes: p.variacoes,
         dataInicio: dataInicioPromo || undefined,

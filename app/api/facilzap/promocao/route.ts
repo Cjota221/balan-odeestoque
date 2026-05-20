@@ -5,9 +5,11 @@ type PromocaoItem = {
   nome?: string
   sku?: string
   catalogoId: number
+  precoAtual: number
   precoPromocional: number
   variacoes?: Array<{
     id: number
+    precoAtual: number
     precoPromocional: number
   }>
   dataInicio?: string
@@ -27,8 +29,11 @@ function isPromocaoItem(value: unknown): value is PromocaoItem {
   return (
     (typeof item.id === 'string' || typeof item.id === 'number') &&
     typeof item.catalogoId === 'number' &&
+    typeof item.precoAtual === 'number' &&
     typeof item.precoPromocional === 'number' &&
+    Number.isFinite(item.precoAtual) &&
     Number.isFinite(item.precoPromocional) &&
+    item.precoAtual > 0 &&
     item.precoPromocional > 0
   )
 }
@@ -44,9 +49,16 @@ function montarPayload(item: PromocaoItem) {
   }
   const variacoes = (item.variacoes || []).filter(v =>
     v.id > 0 &&
+    Number.isFinite(v.precoAtual) &&
     Number.isFinite(v.precoPromocional) &&
+    v.precoAtual > 0 &&
     v.precoPromocional > 0
   )
+  const promocionalGeral = {
+    ativado: variacoes.length === 0,
+    preco: variacoes.length === 0 ? Number(item.precoPromocional.toFixed(2)) : 0,
+    cronograma
+  }
 
   return {
     campanha_promocional: true,
@@ -56,11 +68,19 @@ function montarPayload(item: PromocaoItem) {
         id: item.catalogoId,
         ativado: true,
         precos: {
+          preco: Number(item.precoAtual.toFixed(2)),
+          preco_custo: 0,
+          promocional: promocionalGeral,
           ...(variacoes.length > 0
             ? {
                 variacoes: variacoes.map(v => ({
                   id: v.id,
                   ativado: true,
+                  preco: Number(v.precoAtual.toFixed(2)),
+                  preco_custo: {
+                    ativado: false,
+                    preco: 0
+                  },
                   promocional: {
                     ativado: true,
                     preco: Number(v.precoPromocional.toFixed(2)),
@@ -68,13 +88,7 @@ function montarPayload(item: PromocaoItem) {
                   }
                 }))
               }
-            : {
-                promocional: {
-                  ativado: true,
-                  preco: Number(item.precoPromocional.toFixed(2)),
-                  cronograma
-                }
-              })
+            : {})
         }
       }
     ]

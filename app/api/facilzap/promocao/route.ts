@@ -103,7 +103,9 @@ export async function POST(req: Request) {
 
   const resultados = []
 
-  for (const item of itens) {
+  for (let index = 0; index < itens.length; index++) {
+    const item = itens[index]
+
     try {
       const resp = await fetch(`https://api.facilzap.app.br/produtos/${item.id}`, {
         method: 'PATCH',
@@ -137,7 +139,9 @@ export async function POST(req: Request) {
       })
     }
 
-    await sleep(900)
+    if (index < itens.length - 1) {
+      await sleep(900)
+    }
   }
 
   const atualizados = resultados.filter(r => r.ok).length

@@ -450,6 +450,16 @@ function filtroClassName(ativo: boolean, activeClasses: string) {
   return `rounded-xl border px-4 py-3 text-center transition ${ativo ? activeClasses : 'bg-white border-slate-200 shadow-sm hover:bg-slate-50'}`
 }
 
+function chunkArray<T>(items: T[], size: number) {
+  const chunks: T[][] = []
+
+  for (let i = 0; i < items.length; i += size) {
+    chunks.push(items.slice(i, i + size))
+  }
+
+  return chunks
+}
+
 // ─── Componente principal ─────────────────────────────────────────────────────
 
 export default function Home() {
@@ -743,31 +753,51 @@ export default function Home() {
     setRelatorioPromocao(null)
 
     try {
-      const resp = await fetch('/api/facilzap/promocao', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          itens: promocaoPreparada.elegiveis.map(p => ({
-            id: p.id,
-            nome: p.nome,
-            sku: p.sku,
-            catalogoId: p.catalogoId,
-            precoPromocional: p.precoPromocional,
-            variacoes: p.variacoes,
-            dataInicio: dataInicioPromo || undefined,
-            dataTermino: dataTerminoPromo || undefined
-          }))
+      const itens = promocaoPreparada.elegiveis.map(p => ({
+        id: p.id,
+        nome: p.nome,
+        sku: p.sku,
+        catalogoId: p.catalogoId,
+        precoPromocional: p.precoPromocional,
+        variacoes: p.variacoes,
+        dataInicio: dataInicioPromo || undefined,
+        dataTermino: dataTerminoPromo || undefined
+      }))
+      const lotes = chunkArray(itens, 5)
+      const acumulado: ResultadoPromocao = { atualizados: 0, falhas: 0, resultados: [] }
+
+      for (let i = 0; i < lotes.length; i++) {
+        const lote = lotes[i]
+        setResultadoPromocao(`Aplicando lote ${i + 1} de ${lotes.length} (${acumulado.atualizados} aplicados até agora).`)
+
+        const resp = await fetch('/api/facilzap/promocao', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ itens: lote })
         })
-      })
 
-      const data = await resp.json()
+        const data = await resp.json().catch(() => null)
 
-      if (!resp.ok || data.error) {
-        throw new Error(data.message || 'Não foi possível aplicar a promoção.')
+        if (!resp.ok || data?.error) {
+          const message = data?.message || 'Não foi possível aplicar este lote.'
+          acumulado.resultados.push(...lote.map(item => ({
+            id: item.id,
+            nome: item.nome,
+            sku: item.sku,
+            ok: false,
+            status: resp.status,
+            message
+          })))
+        } else {
+          acumulado.resultados.push(...(Array.isArray(data.resultados) ? data.resultados : []))
+        }
+
+        acumulado.atualizados = acumulado.resultados.filter(r => r.ok).length
+        acumulado.falhas = acumulado.resultados.length - acumulado.atualizados
+        setRelatorioPromocao({ ...acumulado, resultados: [...acumulado.resultados] })
       }
 
-      setResultadoPromocao(`Promoção aplicada em ${data.atualizados} produtos. Falhas: ${data.falhas}.`)
-      setRelatorioPromocao(data)
+      setResultadoPromocao(`Promoção aplicada em ${acumulado.atualizados} produtos. Falhas: ${acumulado.falhas}.`)
       setConfirmarPromocao(false)
     } catch (e: unknown) {
       setResultadoPromocao(e instanceof Error ? e.message : 'Erro desconhecido')

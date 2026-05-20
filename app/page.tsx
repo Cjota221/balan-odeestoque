@@ -23,13 +23,14 @@ interface Produto {
   preco_custo: number
   preco_venda: number
   precoInformado: boolean
+  temPromocao: boolean
   valor_parado: number
   variacoes: Variacao[]
 }
 
 type OrdemColuna = 'estoque' | 'preco_venda' | 'lucro' | 'lucro_total' | 'margem'
 type DirecaoOrdem = 'asc' | 'desc'
-type FiltroProdutos = 'todos' | 'ativos_estoque' | 'desativados_estoque' | 'zerados' | 'sem_preco'
+type FiltroProdutos = 'todos' | 'ativos_estoque' | 'ativos_sem_promocao' | 'ativos_com_promocao' | 'desativados_estoque' | 'zerados' | 'sem_preco'
 type ResultadoPromocaoItem = {
   id: string
   nome: string
@@ -187,8 +188,53 @@ function getCatalogPrices(produto: ApiObject) {
 
   return {
     preco: getPositiveNumber(precos, [['preco'], ['valor'], ['price']]),
-    promocional: getPositiveNumber(precos, [['preco_promocional'], ['promocional'], ['promotion_price'], ['sale_price']])
+    promocional: getPromotionPrice(precos)
   }
+}
+
+function getPromotionPrice(precos: ApiObject) {
+  const promocional = getValue(precos, [['promocional']])
+
+  if (isObject(promocional)) {
+    const ativo = getBoolean(promocional, [['ativado'], ['ativo'], ['active'], ['enabled']], true)
+    const preco = getPositiveNumber(promocional, [['preco'], ['valor'], ['price']])
+
+    return ativo ? preco : 0
+  }
+
+  return getPositiveNumber(precos, [['preco_promocional'], ['promocional'], ['promotion_price'], ['sale_price']])
+}
+
+function hasVariationPromotion(precos: ApiObject) {
+  const variacoes = getArray(precos, [['variacoes'], ['variations']])
+
+  return variacoes.some(variacao => {
+    const promocional = getValue(variacao, [['promocional']])
+
+    if (isObject(promocional)) {
+      const ativo = getBoolean(promocional, [['ativado'], ['ativo'], ['active'], ['enabled']], true)
+      const preco = getPositiveNumber(promocional, [['preco'], ['valor'], ['price']])
+
+      return ativo && preco > 0
+    }
+
+    return getPositiveNumber(variacao, [
+      ['preco_promocional'],
+      ['promocional'],
+      ['promotion_price'],
+      ['sale_price']
+    ]) > 0
+  })
+}
+
+function hasActivePromotion(produto: ApiObject) {
+  const catalogos = getArray(produto, [['catalogos']])
+
+  return catalogos.some(catalogo => {
+    const precos = getValue(catalogo, [['precos']])
+
+    return isObject(precos) && (getPromotionPrice(precos) > 0 || hasVariationPromotion(precos))
+  })
 }
 
 function getCatalogoId(produto: ApiObject) {
@@ -312,6 +358,7 @@ function normalizarProdutos(lista: unknown[]): Produto[] {
     ])
 
     const preco_venda = extractPrice(p, variacoes)
+    const temPromocao = hasActivePromotion(p)
 
     return {
       id: getText(p, [['id'], ['codigo']], crypto.randomUUID()),
@@ -325,6 +372,7 @@ function normalizarProdutos(lista: unknown[]): Produto[] {
       preco_custo,
       preco_venda,
       precoInformado: preco_venda > 0,
+      temPromocao,
       valor_parado: estoqueTotal * preco_custo,
       variacoes: variNorm
     }
@@ -334,6 +382,14 @@ function normalizarProdutos(lista: unknown[]): Produto[] {
 function filtrarPorStatus(produtos: Produto[], filtro: FiltroProdutos) {
   if (filtro === 'ativos_estoque') {
     return produtos.filter(p => p.ativado && p.estoqueTotal !== 0)
+  }
+
+  if (filtro === 'ativos_sem_promocao') {
+    return produtos.filter(p => p.ativado && p.estoqueTotal !== 0 && p.precoInformado && !p.temPromocao)
+  }
+
+  if (filtro === 'ativos_com_promocao') {
+    return produtos.filter(p => p.ativado && p.estoqueTotal !== 0 && p.temPromocao)
   }
 
   if (filtro === 'desativados_estoque') {
@@ -476,7 +532,10 @@ export default function Home() {
     const valorEstoque  = produtos.reduce((s, p) => s + (p.estoqueTotal > 0 ? p.valor_parado : 0), 0)
     const zerados       = produtos.filter(p => p.estoqueTotal === 0).length
     const comEstoque    = produtos.filter(p => p.estoqueTotal !== 0)
-    const ativosComEstoque = comEstoque.filter(p => p.ativado).length
+    const produtosAtivosComEstoque = comEstoque.filter(p => p.ativado)
+    const ativosComEstoque = produtosAtivosComEstoque.length
+    const ativosSemPromocao = produtosAtivosComEstoque.filter(p => p.precoInformado && !p.temPromocao).length
+    const ativosComPromocao = produtosAtivosComEstoque.filter(p => p.temPromocao).length
     const desativadosComEstoque = comEstoque.filter(p => !p.ativado).length
     const produtosSemPreco = produtos.filter(p => p.estoqueTotal !== 0 && p.preco_venda <= 0).length
     const produtosComPreco = produtos.filter(p => p.precoInformado)
@@ -502,6 +561,8 @@ export default function Home() {
       valorEstoque,
       zerados,
       ativosComEstoque,
+      ativosSemPromocao,
+      ativosComPromocao,
       desativadosComEstoque,
       produtosSemPreco,
       produtosComPreco: produtosComPreco.length,
@@ -540,7 +601,7 @@ export default function Home() {
 
   const promocaoPreparada = useMemo(() => {
     const elegiveis = produtos
-      .filter(p => p.ativado && p.estoqueTotal !== 0 && p.precoInformado)
+      .filter(p => p.ativado && p.estoqueTotal !== 0 && p.precoInformado && !p.temPromocao)
       .map(p => ({
         id: p.id,
         nome: p.nome,
@@ -562,7 +623,7 @@ export default function Home() {
       .filter(p => p.precoPromocional > 0 && (p.tipoRegraPreco !== 'variacao' || p.variacoes.length > 0))
 
     const comPrecoPorVariacao = produtos.filter(p =>
-      p.ativado && p.estoqueTotal !== 0 && p.precoInformado && p.tipoRegraPreco === 'variacao'
+      p.ativado && p.estoqueTotal !== 0 && p.precoInformado && !p.temPromocao && p.tipoRegraPreco === 'variacao'
     ).length
 
     const semPreco = produtos.filter(p =>
@@ -570,10 +631,11 @@ export default function Home() {
     ).length
 
     const desativadosComEstoque = produtos.filter(p => !p.ativado && p.estoqueTotal !== 0).length
+    const comPromocao = produtos.filter(p => p.ativado && p.estoqueTotal !== 0 && p.temPromocao).length
 
     const aplicaveisPorVariacao = elegiveis.filter(p => p.tipoRegraPreco === 'variacao').length
 
-    return { elegiveis, comPrecoPorVariacao, aplicaveisPorVariacao, semPreco, desativadosComEstoque }
+    return { elegiveis, comPrecoPorVariacao, aplicaveisPorVariacao, semPreco, desativadosComEstoque, comPromocao }
   }, [produtos, desconto])
 
   // ─── Ordenação ────────────────────────────────────────────────────────────
@@ -610,6 +672,13 @@ export default function Home() {
     }
 
     if (produto.ativado) {
+      if (produto.temPromocao) {
+        return {
+          label: 'Com promoção',
+          className: 'bg-pink-50 text-[#c00872] border-pink-200'
+        }
+      }
+
       return {
         label: 'Ativado',
         className: 'bg-emerald-50 text-emerald-700 border-emerald-200'
@@ -662,7 +731,7 @@ export default function Home() {
     }
 
     const ok = window.confirm(
-      `Aplicar ${desconto}% OFF em ${promocaoPreparada.elegiveis.length} produtos ativados com estoque?`
+      `Aplicar ${desconto}% OFF em ${promocaoPreparada.elegiveis.length} produtos ativados, com estoque e sem promoção?`
     )
 
     if (!ok) {
@@ -876,13 +945,17 @@ export default function Home() {
             <div>
               <h2 className="font-semibold text-lg">Aplicar Promoção na FácilZap</h2>
               <p className="text-sm text-slate-500 mt-1">
-                Altera produtos ativados com estoque. Produtos com preço por variação recebem promoção em cada variação.
+                Altera somente produtos ativados, com estoque, com preço e sem promoção. Produtos com preço por variação recebem promoção em cada variação.
               </p>
             </div>
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-center">
+            <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 text-center">
               <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3">
-                <p className="text-xs text-emerald-700">Prontos</p>
+                <p className="text-xs text-emerald-700">Sem promoção</p>
                 <p className="text-xl font-bold text-emerald-700">{promocaoPreparada.elegiveis.length}</p>
+              </div>
+              <div className="rounded-xl border border-pink-200 bg-pink-50 px-4 py-3">
+                <p className="text-xs text-[#c00872]">Já com promoção</p>
+                <p className="text-xl font-bold text-[#c00872]">{promocaoPreparada.comPromocao}</p>
               </div>
               <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
                 <p className="text-xs text-slate-600">Por variação</p>
@@ -1046,7 +1119,7 @@ export default function Home() {
 
       {/* ── Cards gerais ── */}
       {temDados && (
-        <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
+        <div className="grid grid-cols-2 lg:grid-cols-7 gap-4">
           <button
             type="button"
             onClick={() => setFiltroProdutos('todos')}
@@ -1062,6 +1135,22 @@ export default function Home() {
           >
             <p className="text-emerald-700 text-xs mb-1">Com estoque ativados</p>
             <p className="text-2xl font-bold text-emerald-700">{metricas.ativosComEstoque}</p>
+          </button>
+          <button
+            type="button"
+            onClick={() => setFiltroProdutos('ativos_sem_promocao')}
+            className={filtroClassName(filtroProdutos === 'ativos_sem_promocao', 'bg-emerald-50 border-emerald-300 shadow-sm')}
+          >
+            <p className="text-emerald-700 text-xs mb-1">Ativos sem promo</p>
+            <p className="text-2xl font-bold text-emerald-700">{metricas.ativosSemPromocao}</p>
+          </button>
+          <button
+            type="button"
+            onClick={() => setFiltroProdutos('ativos_com_promocao')}
+            className={filtroClassName(filtroProdutos === 'ativos_com_promocao', 'bg-pink-50 border-pink-300 shadow-sm')}
+          >
+            <p className="text-[#c00872] text-xs mb-1">Ativos com promo</p>
+            <p className="text-2xl font-bold text-[#c00872]">{metricas.ativosComPromocao}</p>
           </button>
           <button
             type="button"
@@ -1107,6 +1196,8 @@ export default function Home() {
             {[
               ['todos', 'Todos'],
               ['ativos_estoque', 'Ativados com estoque'],
+              ['ativos_sem_promocao', 'Ativos sem promoção'],
+              ['ativos_com_promocao', 'Ativos com promoção'],
               ['desativados_estoque', 'Desativados com estoque'],
               ['zerados', 'Zerados'],
               ['sem_preco', 'Sem preço']
@@ -1266,13 +1357,17 @@ export default function Home() {
             {produtosOrdenados.length} de {produtos.length} produtos · filtro ativo: {
               filtroProdutos === 'ativos_estoque'
                 ? 'ativados com estoque'
-                : filtroProdutos === 'desativados_estoque'
-                  ? 'desativados com estoque'
-                  : filtroProdutos === 'zerados'
-                    ? 'zerados'
-                    : filtroProdutos === 'sem_preco'
-                      ? 'sem preço'
-                      : 'todos'
+                : filtroProdutos === 'ativos_sem_promocao'
+                  ? 'ativados com estoque sem promoção'
+                  : filtroProdutos === 'ativos_com_promocao'
+                    ? 'ativados com estoque com promoção'
+                    : filtroProdutos === 'desativados_estoque'
+                      ? 'desativados com estoque'
+                      : filtroProdutos === 'zerados'
+                        ? 'zerados'
+                        : filtroProdutos === 'sem_preco'
+                          ? 'sem preço'
+                          : 'todos'
             } · clique na linha para ver variações
           </p>
         </div>

@@ -544,6 +544,7 @@ export default function Home() {
     const comEstoque    = produtos.filter(p => p.estoqueTotal !== 0)
     const produtosAtivosComEstoque = comEstoque.filter(p => p.ativado)
     const ativosComEstoque = produtosAtivosComEstoque.length
+    const unidadesAtivasComEstoque = produtosAtivosComEstoque.reduce((s, p) => s + Math.max(0, p.estoqueTotal), 0)
     const ativosSemPromocao = produtosAtivosComEstoque.filter(p => p.precoInformado && !p.temPromocao).length
     const ativosComPromocao = produtosAtivosComEstoque.filter(p => p.temPromocao).length
     const desativadosComEstoque = comEstoque.filter(p => !p.ativado).length
@@ -571,6 +572,7 @@ export default function Home() {
       valorEstoque,
       zerados,
       ativosComEstoque,
+      unidadesAtivasComEstoque,
       ativosSemPromocao,
       ativosComPromocao,
       desativadosComEstoque,
@@ -924,7 +926,7 @@ export default function Home() {
           <span className="text-slate-500 text-sm w-8">80%</span>
         </div>
 
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 sm:grid-cols-5 gap-4">
           <div className="bg-slate-50 rounded-xl p-4 text-center border border-slate-100">
             <p className="text-slate-500 text-xs mb-1">Preço promo médio</p>
             <p className="font-bold text-slate-950">{metricas.produtosComPreco > 0 ? fmt(metricas.precoPromoMedio) : 'Sem preço'}</p>
@@ -940,6 +942,10 @@ export default function Home() {
             <p className={`font-bold ${metricas.margemMedia >= 15 ? 'text-emerald-600' : metricas.margemMedia >= 0 ? 'text-amber-600' : 'text-red-600'}`}>
               {fmtN(metricas.margemMedia)}%
             </p>
+          </div>
+          <div className="bg-slate-50 rounded-xl p-4 text-center border border-slate-100">
+            <p className="text-slate-500 text-xs mb-1">Peças em ativos</p>
+            <p className="font-bold text-emerald-700">{metricas.unidadesAtivasComEstoque.toLocaleString('pt-BR')}</p>
           </div>
           <div className="bg-slate-50 rounded-xl p-4 text-center border border-slate-100">
             <p className="text-slate-500 text-xs mb-1">Total unidades</p>
@@ -1151,7 +1157,7 @@ export default function Home() {
 
       {/* ── Cards gerais ── */}
       {temDados && (
-        <div className="grid grid-cols-2 lg:grid-cols-7 gap-4">
+        <div className="grid grid-cols-2 lg:grid-cols-8 gap-4">
           <button
             type="button"
             onClick={() => setFiltroProdutos('todos')}
@@ -1167,6 +1173,14 @@ export default function Home() {
           >
             <p className="text-emerald-700 text-xs mb-1">Com estoque ativados</p>
             <p className="text-2xl font-bold text-emerald-700">{metricas.ativosComEstoque}</p>
+          </button>
+          <button
+            type="button"
+            onClick={() => setFiltroProdutos('ativos_estoque')}
+            className={filtroClassName(filtroProdutos === 'ativos_estoque', 'bg-emerald-50 border-emerald-300 shadow-sm')}
+          >
+            <p className="text-emerald-700 text-xs mb-1">Peças ativadas</p>
+            <p className="text-2xl font-bold text-emerald-700">{metricas.unidadesAtivasComEstoque.toLocaleString('pt-BR')}</p>
           </button>
           <button
             type="button"

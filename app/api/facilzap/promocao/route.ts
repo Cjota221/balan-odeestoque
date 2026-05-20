@@ -4,6 +4,10 @@ type PromocaoItem = {
   id: string
   catalogoId: number
   precoPromocional: number
+  variacoes?: Array<{
+    id: number
+    precoPromocional: number
+  }>
   dataInicio?: string
   dataTermino?: string
 }
@@ -32,21 +36,43 @@ function sleep(ms: number) {
 }
 
 function montarPayload(item: PromocaoItem) {
+  const cronograma = {
+    data_inicio: item.dataInicio || null,
+    data_termino: item.dataTermino || null
+  }
+  const variacoes = (item.variacoes || []).filter(v =>
+    v.id > 0 &&
+    Number.isFinite(v.precoPromocional) &&
+    v.precoPromocional > 0
+  )
+
   return {
     campanha_promocional: true,
+    tipo_regra_preco: variacoes.length > 0 ? 'variacao' : 'geral',
     catalogos: [
       {
         id: item.catalogoId,
         ativado: true,
         precos: {
-          promocional: {
-            ativado: true,
-            preco: Number(item.precoPromocional.toFixed(2)),
-            cronograma: {
-              data_inicio: item.dataInicio || null,
-              data_termino: item.dataTermino || null
-            }
-          }
+          ...(variacoes.length > 0
+            ? {
+                variacoes: variacoes.map(v => ({
+                  id: v.id,
+                  ativado: true,
+                  promocional: {
+                    ativado: true,
+                    preco: Number(v.precoPromocional.toFixed(2)),
+                    cronograma
+                  }
+                }))
+              }
+            : {
+                promocional: {
+                  ativado: true,
+                  preco: Number(item.precoPromocional.toFixed(2)),
+                  cronograma
+                }
+              })
         }
       }
     ]

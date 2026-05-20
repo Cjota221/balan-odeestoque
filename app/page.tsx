@@ -858,7 +858,7 @@ export default function Home() {
             <div>
               <h2 className="font-semibold text-lg">Aplicar Promoção na FácilZap</h2>
               <p className="text-sm text-slate-500 mt-1">
-                Altera somente produtos ativados, com estoque e com preço geral informado.
+                Altera produtos ativados com estoque. Produtos com preço por variação recebem promoção em cada variação.
               </p>
             </div>
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-center">
@@ -867,8 +867,8 @@ export default function Home() {
                 <p className="text-xl font-bold text-emerald-700">{promocaoPreparada.elegiveis.length}</p>
               </div>
               <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
-                <p className="text-xs text-slate-600">Preço por variação</p>
-                <p className="text-xl font-bold text-slate-700">{promocaoPreparada.comPrecoPorVariacao}</p>
+                <p className="text-xs text-slate-600">Por variação</p>
+                <p className="text-xl font-bold text-slate-700">{promocaoPreparada.aplicaveisPorVariacao}</p>
               </div>
               <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
                 <p className="text-xs text-amber-700">Sem preço</p>
@@ -908,6 +908,7 @@ export default function Home() {
                 <thead>
                   <tr className="bg-slate-100 text-slate-600 text-xs uppercase tracking-wide">
                     <th className="px-3 py-3 text-left">Produto</th>
+                    <th className="px-3 py-3 text-left">Regra</th>
                     <th className="px-3 py-3 text-right">Estoque</th>
                     <th className="px-3 py-3 text-right">Preço atual</th>
                     <th className="px-3 py-3 text-right">Preço promocional</th>
@@ -919,6 +920,9 @@ export default function Home() {
                       <td className="px-3 py-2.5">
                         <div className="font-medium text-slate-950">{p.nome}</div>
                         <div className="text-xs text-slate-500">{p.sku}</div>
+                      </td>
+                      <td className="px-3 py-2.5 text-slate-600">
+                        {p.tipoRegraPreco === 'variacao' ? `${p.variacoes.length} variações` : 'Geral'}
                       </td>
                       <td className="px-3 py-2.5 text-right">{fmtEstoque(p.estoque)}</td>
                       <td className="px-3 py-2.5 text-right">{fmt(p.precoAtual)}</td>

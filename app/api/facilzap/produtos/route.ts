@@ -52,8 +52,70 @@ function isPriceKey(key: string) {
   return key.toLowerCase().includes('preco') || key.toLowerCase().includes('valor')
 }
 
+function getPositiveNumber(obj: ApiObject, keys: string[]) {
+  for (const key of keys) {
+    const value = toNumber(obj[key])
+
+    if (value > 0) {
+      return value
+    }
+  }
+
+  return 0
+}
+
+function extrairPrecos(obj: ApiObject) {
+  const precoVenda = getPositiveNumber(obj, [
+    'preco_venda',
+    'preco',
+    'valor_venda',
+    'valor',
+    'price',
+    'sale_price',
+    'preco_promocional',
+    'preco_cheio',
+    'preco_de_venda'
+  ])
+  const precoCusto = getPositiveNumber(obj, [
+    'preco_custo',
+    'custo',
+    'valor_custo',
+    'preco_compra',
+    'cost_price',
+    'preco_de_custo'
+  ])
+
+  if (precoVenda > 0 && precoCusto > 0) {
+    return { preco_venda: precoVenda, preco_custo: precoCusto }
+  }
+
+  for (const key of ['valores', 'precos', 'pricing', 'prices', 'financeiro']) {
+    const sub = obj[key]
+
+    if (sub && typeof sub === 'object' && !Array.isArray(sub)) {
+      const nested = sub as ApiObject
+      return {
+        preco_venda: precoVenda || getPositiveNumber(nested, ['venda', 'preco', 'valor', 'price', 'sale_price']),
+        preco_custo: precoCusto || getPositiveNumber(nested, ['custo', 'cost', 'cost_price', 'compra'])
+      }
+    }
+  }
+
+  return { preco_venda: precoVenda, preco_custo: precoCusto }
+}
+
 function mergeProdutoComDetalhe(produto: ApiObject, detalhe: ApiObject) {
   const merged = { ...produto, ...detalhe }
+  const precosProduto = extrairPrecos(produto)
+  const precosDetalhe = extrairPrecos(detalhe)
+
+  if (precosProduto.preco_venda > 0 && precosDetalhe.preco_venda <= 0) {
+    merged.preco_venda = precosProduto.preco_venda
+  }
+
+  if (precosProduto.preco_custo > 0 && precosDetalhe.preco_custo <= 0) {
+    merged.preco_custo = precosProduto.preco_custo
+  }
 
   for (const [key, value] of Object.entries(produto)) {
     if (!hasValue(merged[key]) || (isPriceKey(key) && toNumber(value) > 0 && toNumber(merged[key]) <= 0)) {
@@ -64,7 +126,60 @@ function mergeProdutoComDetalhe(produto: ApiObject, detalhe: ApiObject) {
   return merged
 }
 
-async function carregarDetalhesProdutos(produtos: unknown[], token: string) {
+function unwrapData(data: unknown) {
+  if (data && typeof data === 'object' && 'data' in data && (data as ApiObject).data) {
+    return (data as ApiObject).data
+  }
+
+  if (data && typeof data === 'object' && 'produto' in data && (data as ApiObject).produto) {
+    return (data as ApiObject).produto
+  }
+
+  return data
+}
+
+async function buscarDetalheProduto(id: string, token: string, empresa?: string) {
+  const urls = [
+    `https://api.facilzap.app.br/produtos/${id}`,
+    ...(empresa ? [
+      `https://api.facilzap.com.br/v1/${empresa}/produtos/${id}`,
+      `https://api.facilzap.com.br/v1/${empresa}/produto/${id}`
+    ] : []),
+    `https://api.facilzap.com.br/produtos/${id}`
+  ]
+
+  let primeiroDetalhe: ApiObject | null = null
+
+  for (const urlString of urls) {
+    try {
+      const url = new URL(urlString)
+      const { resp, data } = await fetchFacilZapJson(url, token)
+
+      if (!resp.ok) {
+        continue
+      }
+
+      const detalhe = unwrapData(data)
+
+      if (!detalhe || typeof detalhe !== 'object' || Array.isArray(detalhe)) {
+        continue
+      }
+
+      const obj = detalhe as ApiObject
+      primeiroDetalhe ||= obj
+
+      if (extrairPrecos(obj).preco_venda > 0) {
+        return obj
+      }
+    } catch {
+      continue
+    }
+  }
+
+  return primeiroDetalhe
+}
+
+async function carregarDetalhesProdutos(produtos: unknown[], token: string, empresa?: string) {
   const detalhes = await Promise.all(produtos.map(async produto => {
     const id = getProdutoId(produto)
 
@@ -72,24 +187,13 @@ async function carregarDetalhesProdutos(produtos: unknown[], token: string) {
       return produto
     }
 
-    try {
-      const url = new URL(`https://api.facilzap.app.br/produtos/${id}`)
-      const { resp, data } = await fetchFacilZapJson(url, token)
+    const detalhe = await buscarDetalheProduto(id, token, empresa)
 
-      if (!resp.ok) {
-        return produto
-      }
-
-      const detalhe = data && typeof data === 'object' && 'data' in data
-        ? (data as ApiObject).data
-        : data
-
-      return detalhe && typeof detalhe === 'object'
-        ? mergeProdutoComDetalhe(produto as ApiObject, detalhe as ApiObject)
-        : produto
-    } catch {
+    if (!detalhe) {
       return produto
     }
+
+    return mergeProdutoComDetalhe(produto as ApiObject, detalhe)
   }))
 
   return detalhes
@@ -101,6 +205,7 @@ export async function GET(req: Request) {
   const length = searchParams.get('length') || searchParams.get('limit') || '100'
 
   const token = process.env.FACILZAP_API_TOKEN
+  const empresa = process.env.FACILZAP_EMPRESA
 
   if (!token) {
     return NextResponse.json(
@@ -121,7 +226,7 @@ export async function GET(req: Request) {
     }
 
     if (data && typeof data === 'object' && Array.isArray((data as ApiObject).data)) {
-      const produtos = await carregarDetalhesProdutos((data as ApiObject).data as unknown[], token)
+      const produtos = await carregarDetalhesProdutos((data as ApiObject).data as unknown[], token, empresa)
       return NextResponse.json({ ...(data as ApiObject), data: produtos }, { status: resp.status })
     }
 

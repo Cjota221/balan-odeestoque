@@ -867,6 +867,20 @@ export default function Home() {
         </div>
       )}
 
+      {temDados && (
+        <div className="bg-emerald-50 rounded-2xl p-6 border border-emerald-200 shadow-sm">
+          <p className="text-sm font-semibold text-emerald-700 uppercase tracking-wide">
+            Quantidade total do estoque ativado
+          </p>
+          <p className="mt-2 text-5xl font-extrabold text-emerald-700">
+            {metricas.unidadesAtivasComEstoque.toLocaleString('pt-BR')}
+          </p>
+          <p className="mt-1 text-slate-600">
+            peças ativas em estoque, somando {metricas.ativosComEstoque.toLocaleString('pt-BR')} produtos ativados.
+          </p>
+        </div>
+      )}
+
       {/* ── Cards de custo ── */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <div className="bg-white rounded-xl p-4 border border-slate-200 shadow-sm">
@@ -926,7 +940,7 @@ export default function Home() {
           <span className="text-slate-500 text-sm w-8">80%</span>
         </div>
 
-        <div className="grid grid-cols-2 sm:grid-cols-5 gap-4">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
           <div className="bg-slate-50 rounded-xl p-4 text-center border border-slate-100">
             <p className="text-slate-500 text-xs mb-1">Preço promo médio</p>
             <p className="font-bold text-slate-950">{metricas.produtosComPreco > 0 ? fmt(metricas.precoPromoMedio) : 'Sem preço'}</p>
@@ -942,10 +956,6 @@ export default function Home() {
             <p className={`font-bold ${metricas.margemMedia >= 15 ? 'text-emerald-600' : metricas.margemMedia >= 0 ? 'text-amber-600' : 'text-red-600'}`}>
               {fmtN(metricas.margemMedia)}%
             </p>
-          </div>
-          <div className="bg-slate-50 rounded-xl p-4 text-center border border-slate-100">
-            <p className="text-slate-500 text-xs mb-1">Peças em ativos</p>
-            <p className="font-bold text-emerald-700">{metricas.unidadesAtivasComEstoque.toLocaleString('pt-BR')}</p>
           </div>
           <div className="bg-slate-50 rounded-xl p-4 text-center border border-slate-100">
             <p className="text-slate-500 text-xs mb-1">Total unidades</p>

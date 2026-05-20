@@ -18,6 +18,7 @@ interface Produto {
   estoqueTotal: number
   preco_custo: number
   preco_venda: number
+  precoInformado: boolean
   valor_parado: number
   variacoes: Variacao[]
 }
@@ -29,6 +30,10 @@ type DirecaoOrdem = 'asc' | 'desc'
 
 function fmt(v: number) {
   return v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
+}
+
+function fmtPreco(v: number) {
+  return v > 0 ? fmt(v) : 'Não informado'
 }
 
 function fmtN(v: number, dec = 1) {
@@ -222,6 +227,7 @@ function normalizarProdutos(lista: unknown[]): Produto[] {
       estoqueTotal,
       preco_custo,
       preco_venda,
+      precoInformado: preco_venda > 0,
       valor_parado: estoqueTotal * preco_custo,
       variacoes: variNorm
     }
@@ -335,18 +341,19 @@ export default function Home() {
     const ativosComEstoque = comEstoque.filter(p => p.ativado).length
     const desativadosComEstoque = comEstoque.filter(p => !p.ativado).length
     const produtosSemPreco = produtos.filter(p => p.estoqueTotal > 0 && p.preco_venda <= 0).length
+    const produtosComPreco = produtos.filter(p => p.precoInformado)
 
-    const faturamentoTotal = produtos.reduce((s, p) => {
+    const faturamentoTotal = produtosComPreco.reduce((s, p) => {
       const precoPromo = p.preco_venda * (1 - desconto / 100)
       return s + p.estoqueTotal * precoPromo
     }, 0)
 
-    const lucroTotal = produtos.reduce((s, p) => {
+    const lucroTotal = produtosComPreco.reduce((s, p) => {
       const precoPromo = p.preco_venda * (1 - desconto / 100)
       return s + p.estoqueTotal * (precoPromo - custoTotal)
     }, 0)
 
-    const precoMedio     = produtos.length > 0 ? produtos.reduce((s, p) => s + p.preco_venda, 0) / produtos.length : 0
+    const precoMedio     = produtosComPreco.length > 0 ? produtosComPreco.reduce((s, p) => s + p.preco_venda, 0) / produtosComPreco.length : 0
     const precoPromoMedio = precoMedio * (1 - desconto / 100)
     const lucroMedio     = precoPromoMedio - custoTotal
     const margemMedia    = precoPromoMedio > 0 ? (lucroMedio / precoPromoMedio * 100) : 0
@@ -359,6 +366,7 @@ export default function Home() {
       ativosComEstoque,
       desativadosComEstoque,
       produtosSemPreco,
+      produtosComPreco: produtosComPreco.length,
       faturamentoTotal,
       lucroTotal,
       margemMedia,
@@ -454,11 +462,11 @@ export default function Home() {
       p.categoria,
       statusProduto(p).label,
       p.estoqueTotal,
-      p.preco_venda.toFixed(2).replace('.', ','),
-      p.precoPromo.toFixed(2).replace('.', ','),
-      p.lucro.toFixed(2).replace('.', ','),
-      p.margem.toFixed(1).replace('.', ','),
-      p.lucroTotalP.toFixed(2).replace('.', ','),
+      p.precoInformado ? p.preco_venda.toFixed(2).replace('.', ',') : '',
+      p.precoInformado ? p.precoPromo.toFixed(2).replace('.', ',') : '',
+      p.precoInformado ? p.lucro.toFixed(2).replace('.', ',') : '',
+      p.precoInformado ? p.margem.toFixed(1).replace('.', ',') : '',
+      p.precoInformado ? p.lucroTotalP.toFixed(2).replace('.', ',') : '',
     ])
 
     const csv = [header, ...rows]
@@ -591,7 +599,7 @@ export default function Home() {
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
           <div className="bg-slate-50 rounded-xl p-4 text-center border border-slate-100">
             <p className="text-slate-500 text-xs mb-1">Preço promo médio</p>
-            <p className="font-bold text-slate-950">{fmt(metricas.precoPromoMedio)}</p>
+            <p className="font-bold text-slate-950">{metricas.produtosComPreco > 0 ? fmt(metricas.precoPromoMedio) : 'Sem preço'}</p>
           </div>
           <div className="bg-slate-50 rounded-xl p-4 text-center border border-slate-100">
             <p className="text-slate-500 text-xs mb-1">Lucro por par</p>
@@ -618,7 +626,7 @@ export default function Home() {
           </div>
           <div className="bg-[#ed0b8c] rounded-xl p-5 text-center border border-[#d30a7d]">
             <p className="text-pink-50 text-sm mb-1">Faturamento total</p>
-            <p className="text-2xl font-extrabold text-white">{fmt(metricas.faturamentoTotal)}</p>
+            <p className="text-2xl font-extrabold text-white">{metricas.produtosComPreco > 0 ? fmt(metricas.faturamentoTotal) : 'Sem preço'}</p>
           </div>
           <div className={`rounded-xl p-5 text-center border ${metricas.lucroTotal >= 0 ? 'bg-emerald-50 border-emerald-200' : 'bg-red-50 border-red-200'}`}>
             <p className="text-slate-700 text-sm mb-1">Lucro total</p>
@@ -662,6 +670,12 @@ export default function Home() {
               {metricas.produtosSemPreco}
             </p>
           </div>
+        </div>
+      )}
+
+      {temDados && metricas.produtosSemPreco > 0 && (
+        <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+          A API de produtos da FácilZap não envia preço nessa listagem. Os campos financeiros ficam em branco até existir um endpoint/campo de preço disponível no token atual.
         </div>
       )}
 
@@ -750,18 +764,20 @@ export default function Home() {
                           {p.estoqueTotal}
                         </span>
                       </td>
-                      <td className="px-3 py-2.5 text-right text-slate-700">{fmt(p.preco_venda)}</td>
-                      <td className="px-3 py-2.5 text-right font-semibold" style={{ color: '#ed0b8c' }}>
-                        {fmt(p.precoPromo)}
+                      <td className={`px-3 py-2.5 text-right ${p.precoInformado ? 'text-slate-700' : 'text-amber-700 text-xs font-semibold'}`}>
+                        {fmtPreco(p.preco_venda)}
                       </td>
-                      <td className={`px-3 py-2.5 text-right font-semibold ${p.lucro >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
-                        {fmt(p.lucro)}
+                      <td className={`px-3 py-2.5 text-right font-semibold ${p.precoInformado ? '' : 'text-amber-700 text-xs'}`} style={p.precoInformado ? { color: '#ed0b8c' } : undefined}>
+                        {fmtPreco(p.precoPromo)}
                       </td>
-                      <td className={`px-3 py-2.5 text-right font-semibold ${p.margem >= 20 ? 'text-emerald-600' : p.margem >= 0 ? 'text-amber-600' : 'text-red-600'}`}>
-                        {fmtN(p.margem)}%
+                      <td className={`px-3 py-2.5 text-right font-semibold ${!p.precoInformado ? 'text-slate-400' : p.lucro >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                        {p.precoInformado ? fmt(p.lucro) : '—'}
                       </td>
-                      <td className={`px-3 py-2.5 text-right font-bold ${p.lucroTotalP >= 0 ? 'text-emerald-700' : 'text-red-700'}`}>
-                        {fmt(p.lucroTotalP)}
+                      <td className={`px-3 py-2.5 text-right font-semibold ${!p.precoInformado ? 'text-slate-400' : p.margem >= 20 ? 'text-emerald-600' : p.margem >= 0 ? 'text-amber-600' : 'text-red-600'}`}>
+                        {p.precoInformado ? `${fmtN(p.margem)}%` : '—'}
+                      </td>
+                      <td className={`px-3 py-2.5 text-right font-bold ${!p.precoInformado ? 'text-slate-400' : p.lucroTotalP >= 0 ? 'text-emerald-700' : 'text-red-700'}`}>
+                        {p.precoInformado ? fmt(p.lucroTotalP) : '—'}
                       </td>
                     </tr>
 

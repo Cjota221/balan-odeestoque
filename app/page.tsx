@@ -5,8 +5,10 @@ import { Fragment, useState, useMemo, useCallback } from 'react'
 // ─── Tipos ────────────────────────────────────────────────────────────────────
 
 interface Variacao {
+  id: number
   nome: string
   estoque: number
+  preco: number
 }
 
 interface Produto {
@@ -27,6 +29,7 @@ interface Produto {
 
 type OrdemColuna = 'estoque' | 'preco_venda' | 'lucro' | 'lucro_total' | 'margem'
 type DirecaoOrdem = 'asc' | 'desc'
+type FiltroProdutos = 'todos' | 'ativos_estoque' | 'desativados_estoque' | 'zerados' | 'sem_preco'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -241,11 +244,24 @@ function variationName(variacao: ApiObject) {
   return [...new Set(parts)].join(' / ') || 'Variação'
 }
 
+function variationPrice(variacao: ApiObject) {
+  return getPositiveNumber(variacao, [
+    ['preco'],
+    ['valor'],
+    ['preco_venda'],
+    ['price'],
+    ['sale_price'],
+    ['valores', 'preco'],
+    ['precos', 'preco']
+  ])
+}
+
 function normalizarProdutos(lista: unknown[]): Produto[] {
   return lista.filter(isObject).map(p => {
     const variacoes = getArray(p, [['variacoes'], ['variations'], ['skus'], ['grades']])
 
     const variNorm: Variacao[] = variacoes.map(v => ({
+      id: toNumber(getValue(v, [['id'], ['variacao_id']])),
       nome: variationName(v),
       estoque: getNumber(v, [
         ['estoque', 'estoque'],
@@ -255,7 +271,8 @@ function normalizarProdutos(lista: unknown[]): Produto[] {
         ['stock'],
         ['quantidade'],
         ['qty']
-      ])
+      ]),
+      preco: variationPrice(v)
     })).sort((a, b) => b.estoque - a.estoque)
 
     const estoqueVariacoes = variNorm.reduce((s, v) => s + v.estoque, 0)
@@ -301,14 +318,35 @@ function normalizarProdutos(lista: unknown[]): Produto[] {
   })
 }
 
-function filtrarProdutos(produtos: Produto[], busca: string) {
+function filtrarPorStatus(produtos: Produto[], filtro: FiltroProdutos) {
+  if (filtro === 'ativos_estoque') {
+    return produtos.filter(p => p.ativado && p.estoqueTotal !== 0)
+  }
+
+  if (filtro === 'desativados_estoque') {
+    return produtos.filter(p => !p.ativado && p.estoqueTotal !== 0)
+  }
+
+  if (filtro === 'zerados') {
+    return produtos.filter(p => p.estoqueTotal === 0)
+  }
+
+  if (filtro === 'sem_preco') {
+    return produtos.filter(p => p.estoqueTotal !== 0 && !p.precoInformado)
+  }
+
+  return produtos
+}
+
+function filtrarProdutos(produtos: Produto[], busca: string, filtro: FiltroProdutos) {
+  const base = filtrarPorStatus(produtos, filtro)
   const q = busca.trim().toLowerCase()
 
   if (!q) {
-    return produtos
+    return base
   }
 
-  return produtos.filter(p =>
+  return base.filter(p =>
     p.nome.toLowerCase().includes(q) ||
     p.sku.toLowerCase().includes(q) ||
     p.categoria.toLowerCase().includes(q)
@@ -339,6 +377,10 @@ function isoDateFromNow(days: number) {
   return date.toISOString().slice(0, 10)
 }
 
+function filtroClassName(ativo: boolean, activeClasses: string) {
+  return `rounded-xl border px-4 py-3 text-center transition ${ativo ? activeClasses : 'bg-white border-slate-200 shadow-sm hover:bg-slate-50'}`
+}
+
 // ─── Componente principal ─────────────────────────────────────────────────────
 
 export default function Home() {
@@ -348,6 +390,7 @@ export default function Home() {
   const [erro, setErro]                     = useState('')
   const [ultimaSync, setUltimaSync]         = useState('')
   const [busca, setBusca]                   = useState('')
+  const [filtroProdutos, setFiltroProdutos] = useState<FiltroProdutos>('todos')
   const [desconto, setDesconto]             = useState(30)
   const [custoFixo, setCustoFixo]           = useState(5.00)
   const [custoVariavel, setCustoVariavel]   = useState(2.35)
@@ -360,7 +403,10 @@ export default function Home() {
   const [aplicandoPromocao, setAplicandoPromocao] = useState(false)
   const [resultadoPromocao, setResultadoPromocao] = useState('')
 
-  const filtrado = useMemo(() => filtrarProdutos(produtos, busca), [produtos, busca])
+  const filtrado = useMemo(
+    () => filtrarProdutos(produtos, busca, filtroProdutos),
+    [produtos, busca, filtroProdutos]
+  )
 
   // ─── Carregamento ──────────────────────────────────────────────────────────
 
@@ -480,17 +526,26 @@ export default function Home() {
 
   const promocaoPreparada = useMemo(() => {
     const elegiveis = produtos
-      .filter(p => p.ativado && p.estoqueTotal !== 0 && p.precoInformado && p.tipoRegraPreco !== 'variacao')
+      .filter(p => p.ativado && p.estoqueTotal !== 0 && p.precoInformado)
       .map(p => ({
         id: p.id,
         nome: p.nome,
         sku: p.sku,
         estoque: p.estoqueTotal,
         catalogoId: p.catalogoId,
+        tipoRegraPreco: p.tipoRegraPreco,
         precoAtual: p.preco_venda,
-        precoPromocional: Number((p.preco_venda * (1 - desconto / 100)).toFixed(2))
+        precoPromocional: Number((p.preco_venda * (1 - desconto / 100)).toFixed(2)),
+        variacoes: p.tipoRegraPreco === 'variacao'
+          ? p.variacoes
+              .filter(v => v.id > 0)
+              .map(v => ({
+                id: v.id,
+                precoPromocional: Number(((v.preco > 0 ? v.preco : p.preco_venda) * (1 - desconto / 100)).toFixed(2))
+              }))
+          : []
       }))
-      .filter(p => p.precoPromocional > 0)
+      .filter(p => p.precoPromocional > 0 && (p.tipoRegraPreco !== 'variacao' || p.variacoes.length > 0))
 
     const comPrecoPorVariacao = produtos.filter(p =>
       p.ativado && p.estoqueTotal !== 0 && p.precoInformado && p.tipoRegraPreco === 'variacao'
@@ -502,7 +557,9 @@ export default function Home() {
 
     const desativadosComEstoque = produtos.filter(p => !p.ativado && p.estoqueTotal !== 0).length
 
-    return { elegiveis, comPrecoPorVariacao, semPreco, desativadosComEstoque }
+    const aplicaveisPorVariacao = elegiveis.filter(p => p.tipoRegraPreco === 'variacao').length
+
+    return { elegiveis, comPrecoPorVariacao, aplicaveisPorVariacao, semPreco, desativadosComEstoque }
   }, [produtos, desconto])
 
   // ─── Ordenação ────────────────────────────────────────────────────────────
@@ -610,6 +667,7 @@ export default function Home() {
             id: p.id,
             catalogoId: p.catalogoId,
             precoPromocional: p.precoPromocional,
+            variacoes: p.variacoes,
             dataInicio: dataInicioPromo || undefined,
             dataTermino: dataTerminoPromo || undefined
           }))
@@ -908,30 +966,50 @@ export default function Home() {
       {/* ── Cards gerais ── */}
       {temDados && (
         <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
-          <div className="bg-white rounded-xl p-4 border border-slate-200 shadow-sm text-center">
+          <button
+            type="button"
+            onClick={() => setFiltroProdutos('todos')}
+            className={filtroClassName(filtroProdutos === 'todos', 'bg-slate-100 border-slate-300 shadow-sm')}
+          >
             <p className="text-slate-500 text-xs mb-1">Total de produtos</p>
             <p className="text-2xl font-bold">{metricas.totalProdutos}</p>
-          </div>
-          <div className="bg-emerald-50 rounded-xl p-4 border border-emerald-200 shadow-sm text-center">
+          </button>
+          <button
+            type="button"
+            onClick={() => setFiltroProdutos('ativos_estoque')}
+            className={filtroClassName(filtroProdutos === 'ativos_estoque', 'bg-emerald-50 border-emerald-300 shadow-sm')}
+          >
             <p className="text-emerald-700 text-xs mb-1">Com estoque ativados</p>
             <p className="text-2xl font-bold text-emerald-700">{metricas.ativosComEstoque}</p>
-          </div>
-          <div className="bg-red-50 rounded-xl p-4 border border-red-200 shadow-sm text-center">
+          </button>
+          <button
+            type="button"
+            onClick={() => setFiltroProdutos('desativados_estoque')}
+            className={filtroClassName(filtroProdutos === 'desativados_estoque', 'bg-red-50 border-red-300 shadow-sm')}
+          >
             <p className="text-red-700 text-xs mb-1">Com estoque desativados</p>
             <p className="text-2xl font-bold text-red-700">{metricas.desativadosComEstoque}</p>
-          </div>
-          <div className="bg-white rounded-xl p-4 border border-slate-200 shadow-sm text-center">
+          </button>
+          <button
+            type="button"
+            onClick={() => setFiltroProdutos('zerados')}
+            className={filtroClassName(filtroProdutos === 'zerados', 'bg-slate-100 border-slate-300 shadow-sm')}
+          >
             <p className="text-slate-500 text-xs mb-1">Produtos zerados</p>
             <p className={`text-2xl font-bold ${metricas.zerados > 0 ? 'text-red-600' : 'text-emerald-600'}`}>
               {metricas.zerados}
             </p>
-          </div>
-          <div className="bg-white rounded-xl p-4 border border-slate-200 shadow-sm text-center">
+          </button>
+          <button
+            type="button"
+            onClick={() => setFiltroProdutos('sem_preco')}
+            className={filtroClassName(filtroProdutos === 'sem_preco', 'bg-amber-50 border-amber-300 shadow-sm')}
+          >
             <p className="text-slate-500 text-xs mb-1">Com estoque sem preço</p>
             <p className={`text-2xl font-bold ${metricas.produtosSemPreco > 0 ? 'text-amber-600' : 'text-emerald-600'}`}>
               {metricas.produtosSemPreco}
             </p>
-          </div>
+          </button>
         </div>
       )}
 
@@ -944,6 +1022,29 @@ export default function Home() {
       {/* ── Busca + Tabela ── */}
       {temDados && (
         <div className="space-y-3">
+          <div className="flex flex-wrap gap-2">
+            {[
+              ['todos', 'Todos'],
+              ['ativos_estoque', 'Ativados com estoque'],
+              ['desativados_estoque', 'Desativados com estoque'],
+              ['zerados', 'Zerados'],
+              ['sem_preco', 'Sem preço']
+            ].map(([value, label]) => (
+              <button
+                key={value}
+                type="button"
+                onClick={() => setFiltroProdutos(value as FiltroProdutos)}
+                className={`rounded-lg border px-3 py-2 text-sm font-semibold transition ${
+                  filtroProdutos === value
+                    ? 'border-[#ed0b8c] bg-pink-50 text-[#ed0b8c]'
+                    : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+
           <input
             type="text"
             placeholder="Buscar por nome, SKU ou categoria…"
@@ -1081,7 +1182,17 @@ export default function Home() {
           </div>
 
           <p className="text-slate-500 text-xs text-right">
-            {produtosOrdenados.length} de {produtos.length} produtos · clique na linha para ver variações
+            {produtosOrdenados.length} de {produtos.length} produtos · filtro ativo: {
+              filtroProdutos === 'ativos_estoque'
+                ? 'ativados com estoque'
+                : filtroProdutos === 'desativados_estoque'
+                  ? 'desativados com estoque'
+                  : filtroProdutos === 'zerados'
+                    ? 'zerados'
+                    : filtroProdutos === 'sem_preco'
+                      ? 'sem preço'
+                      : 'todos'
+            } · clique na linha para ver variações
           </p>
         </div>
       )}

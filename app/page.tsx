@@ -14,6 +14,7 @@ interface Produto {
   nome: string
   sku: string
   categoria: string
+  ativado: boolean
   estoqueTotal: number
   preco_custo: number
   preco_venda: number
@@ -83,6 +84,44 @@ function getNumber(source: ApiObject, paths: string[][]) {
   return toNumber(getValue(source, paths))
 }
 
+function getPositiveNumber(source: ApiObject, paths: string[][]) {
+  for (const path of paths) {
+    const value = toNumber(getValue(source, [path]))
+
+    if (value > 0) {
+      return value
+    }
+  }
+
+  return getNumber(source, paths)
+}
+
+function getBoolean(source: ApiObject, paths: string[][], fallback = false) {
+  const value = getValue(source, paths)
+
+  if (typeof value === 'boolean') {
+    return value
+  }
+
+  if (typeof value === 'number') {
+    return value === 1
+  }
+
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase()
+
+    if (['true', '1', 'sim', 's', 'ativo', 'ativado', 'active', 'enabled'].includes(normalized)) {
+      return true
+    }
+
+    if (['false', '0', 'nao', 'não', 'n', 'inativo', 'desativado', 'inactive', 'disabled'].includes(normalized)) {
+      return false
+    }
+  }
+
+  return fallback
+}
+
 function getText(source: ApiObject, paths: string[][], fallback: string) {
   const value = getValue(source, paths)
 
@@ -149,7 +188,7 @@ function normalizarProdutos(lista: unknown[]): Produto[] {
     ])
     const estoqueTotal = estoqueVariacoes > 0 ? estoqueVariacoes : estoquePrincipal
 
-    const preco_custo = getNumber(p, [
+    const preco_custo = getPositiveNumber(p, [
       ['preco_custo'],
       ['valor_custo'],
       ['preco_compra'],
@@ -159,14 +198,17 @@ function normalizarProdutos(lista: unknown[]): Produto[] {
       ['precos', 'custo']
     ])
 
-    const preco_venda = getNumber(p, [
+    const preco_venda = getPositiveNumber(p, [
       ['preco_venda'],
       ['preco'],
+      ['valor_venda'],
       ['valor'],
       ['price'],
       ['sale_price'],
+      ['preco_promocional'],
       ['valores', 'preco'],
       ['valores', 'venda'],
+      ['valores', 'valor'],
       ['precos', 'venda'],
       ['precos', 'preco']
     ])
@@ -176,6 +218,7 @@ function normalizarProdutos(lista: unknown[]): Produto[] {
       nome: getText(p, [['nome'], ['name'], ['titulo']], 'Sem nome'),
       sku: getText(p, [['sku'], ['codigo'], ['referencia']], '—'),
       categoria: getText(p, [['categoria_nome'], ['categoria'], ['category'], ['grupo'], ['categorias']], '—'),
+      ativado: getBoolean(p, [['ativado'], ['ativo'], ['active'], ['enabled'], ['status']], false),
       estoqueTotal,
       preco_custo,
       preco_venda,
@@ -288,6 +331,10 @@ export default function Home() {
     const totalUnidades = produtos.reduce((s, p) => s + p.estoqueTotal, 0)
     const valorEstoque  = produtos.reduce((s, p) => s + p.valor_parado, 0)
     const zerados       = produtos.filter(p => p.estoqueTotal === 0).length
+    const comEstoque    = produtos.filter(p => p.estoqueTotal > 0)
+    const ativosComEstoque = comEstoque.filter(p => p.ativado).length
+    const desativadosComEstoque = comEstoque.filter(p => !p.ativado).length
+    const produtosSemPreco = produtos.filter(p => p.estoqueTotal > 0 && p.preco_venda <= 0).length
 
     const faturamentoTotal = produtos.reduce((s, p) => {
       const precoPromo = p.preco_venda * (1 - desconto / 100)
@@ -304,7 +351,20 @@ export default function Home() {
     const lucroMedio     = precoPromoMedio - custoTotal
     const margemMedia    = precoPromoMedio > 0 ? (lucroMedio / precoPromoMedio * 100) : 0
 
-    return { totalProdutos, totalUnidades, valorEstoque, zerados, faturamentoTotal, lucroTotal, margemMedia, lucroMedio, precoPromoMedio }
+    return {
+      totalProdutos,
+      totalUnidades,
+      valorEstoque,
+      zerados,
+      ativosComEstoque,
+      desativadosComEstoque,
+      produtosSemPreco,
+      faturamentoTotal,
+      lucroTotal,
+      margemMedia,
+      lucroMedio,
+      precoPromoMedio
+    }
   }, [produtos, desconto, custoTotal])
 
   // ─── Tabela ordenada ──────────────────────────────────────────────────────
@@ -357,11 +417,32 @@ export default function Home() {
     return 'hover:bg-slate-50'
   }
 
+  function statusProduto(produto: Produto) {
+    if (produto.estoqueTotal <= 0) {
+      return {
+        label: 'Sem estoque',
+        className: 'bg-slate-100 text-slate-600 border-slate-200'
+      }
+    }
+
+    if (produto.ativado) {
+      return {
+        label: 'Ativado',
+        className: 'bg-emerald-50 text-emerald-700 border-emerald-200'
+      }
+    }
+
+    return {
+      label: 'Desativado',
+      className: 'bg-red-50 text-red-700 border-red-200'
+    }
+  }
+
   // ─── Export CSV ───────────────────────────────────────────────────────────
 
   function exportarCSV() {
     const header = [
-      'Posição', 'Nome', 'SKU', 'Categoria', 'Estoque',
+      'Posição', 'Nome', 'SKU', 'Categoria', 'Status', 'Estoque',
       'Preço atual', `Preço promo (${desconto}%)`,
       'Lucro/par', 'Margem %', 'Lucro total'
     ]
@@ -371,6 +452,7 @@ export default function Home() {
       p.nome,
       p.sku,
       p.categoria,
+      statusProduto(p).label,
       p.estoqueTotal,
       p.preco_venda.toFixed(2).replace('.', ','),
       p.precoPromo.toFixed(2).replace('.', ','),
@@ -555,10 +637,18 @@ export default function Home() {
 
       {/* ── Cards gerais ── */}
       {temDados && (
-        <div className="grid grid-cols-3 gap-4">
+        <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
           <div className="bg-white rounded-xl p-4 border border-slate-200 shadow-sm text-center">
             <p className="text-slate-500 text-xs mb-1">Total de produtos</p>
             <p className="text-2xl font-bold">{metricas.totalProdutos}</p>
+          </div>
+          <div className="bg-emerald-50 rounded-xl p-4 border border-emerald-200 shadow-sm text-center">
+            <p className="text-emerald-700 text-xs mb-1">Com estoque ativados</p>
+            <p className="text-2xl font-bold text-emerald-700">{metricas.ativosComEstoque}</p>
+          </div>
+          <div className="bg-red-50 rounded-xl p-4 border border-red-200 shadow-sm text-center">
+            <p className="text-red-700 text-xs mb-1">Com estoque desativados</p>
+            <p className="text-2xl font-bold text-red-700">{metricas.desativadosComEstoque}</p>
           </div>
           <div className="bg-white rounded-xl p-4 border border-slate-200 shadow-sm text-center">
             <p className="text-slate-500 text-xs mb-1">Produtos zerados</p>
@@ -567,8 +657,10 @@ export default function Home() {
             </p>
           </div>
           <div className="bg-white rounded-xl p-4 border border-slate-200 shadow-sm text-center">
-            <p className="text-slate-500 text-xs mb-1">Valor total em estoque</p>
-            <p className="text-xl font-bold">{fmt(metricas.valorEstoque)}</p>
+            <p className="text-slate-500 text-xs mb-1">Com estoque sem preço</p>
+            <p className={`text-2xl font-bold ${metricas.produtosSemPreco > 0 ? 'text-amber-600' : 'text-emerald-600'}`}>
+              {metricas.produtosSemPreco}
+            </p>
           </div>
         </div>
       )}
@@ -602,6 +694,7 @@ export default function Home() {
                 <tr className="bg-slate-100 text-slate-600 text-xs uppercase tracking-wide">
                   <th className="px-3 py-3 text-left w-8">#</th>
                   <th className="px-3 py-3 text-left">Produto</th>
+                  <th className="px-3 py-3 text-left">Status</th>
                   <th
                     className="px-3 py-3 text-right cursor-pointer hover:text-slate-950 select-none"
                     onClick={() => alterarOrdem('estoque')}
@@ -639,13 +732,18 @@ export default function Home() {
                 {produtosOrdenados.map((p, i) => (
                   <Fragment key={p.id}>
                     <tr
-                      className={`border-t border-slate-200 transition-colors cursor-pointer ${corLinha(p.margem)}`}
+                      className={`border-t border-slate-200 transition-colors cursor-pointer ${p.estoqueTotal > 0 && !p.ativado ? 'bg-red-50 hover:bg-red-100' : corLinha(p.margem)}`}
                       onClick={() => setExpandido(expandido === p.id ? null : p.id)}
                     >
                       <td className="px-3 py-2.5 text-slate-500 text-xs">{i + 1}</td>
                       <td className="px-3 py-2.5">
                         <div className="font-medium text-slate-950 leading-tight">{p.nome}</div>
                         <div className="text-slate-500 text-xs">{p.sku} · {p.categoria}</div>
+                      </td>
+                      <td className="px-3 py-2.5">
+                        <span className={`inline-flex rounded-full border px-2 py-0.5 text-xs font-semibold ${statusProduto(p).className}`}>
+                          {statusProduto(p).label}
+                        </span>
                       </td>
                       <td className="px-3 py-2.5 text-right">
                         <span className={p.estoqueTotal === 0 ? 'text-red-600 font-semibold' : 'text-slate-950'}>
@@ -669,7 +767,7 @@ export default function Home() {
 
                     {expandido === p.id && p.variacoes.length > 0 && (
                       <tr key={`${p.id}-var`} className="border-t border-slate-200 bg-slate-50">
-                        <td colSpan={8} className="px-6 py-3">
+                        <td colSpan={9} className="px-6 py-3">
                           <p className="text-slate-500 text-xs font-semibold mb-2 uppercase tracking-wide">
                             Variações
                           </p>
@@ -695,7 +793,7 @@ export default function Home() {
 
                 {produtosOrdenados.length === 0 && (
                   <tr>
-                    <td colSpan={8} className="px-4 py-8 text-center text-slate-500">
+                    <td colSpan={9} className="px-4 py-8 text-center text-slate-500">
                       Nenhum produto encontrado.
                     </td>
                   </tr>

@@ -25,6 +25,45 @@ async function fetchFacilZapJson(url: URL, token: string) {
   return { resp, data }
 }
 
+function hasValue(value: unknown) {
+  return value !== undefined && value !== null && value !== ''
+}
+
+function toNumber(value: unknown) {
+  if (typeof value === 'number') {
+    return value
+  }
+
+  if (typeof value === 'string') {
+    const parsed = Number.parseFloat(
+      value
+        .replace(/[^\d,.-]/g, '')
+        .replace(/\.(?=\d{3}(?:\D|$))/g, '')
+        .replace(',', '.')
+    )
+
+    return Number.isFinite(parsed) ? parsed : 0
+  }
+
+  return 0
+}
+
+function isPriceKey(key: string) {
+  return key.toLowerCase().includes('preco') || key.toLowerCase().includes('valor')
+}
+
+function mergeProdutoComDetalhe(produto: ApiObject, detalhe: ApiObject) {
+  const merged = { ...produto, ...detalhe }
+
+  for (const [key, value] of Object.entries(produto)) {
+    if (!hasValue(merged[key]) || (isPriceKey(key) && toNumber(value) > 0 && toNumber(merged[key]) <= 0)) {
+      merged[key] = value
+    }
+  }
+
+  return merged
+}
+
 async function carregarDetalhesProdutos(produtos: unknown[], token: string) {
   const detalhes = await Promise.all(produtos.map(async produto => {
     const id = getProdutoId(produto)
@@ -46,7 +85,7 @@ async function carregarDetalhesProdutos(produtos: unknown[], token: string) {
         : data
 
       return detalhe && typeof detalhe === 'object'
-        ? { ...(produto as ApiObject), ...(detalhe as ApiObject) }
+        ? mergeProdutoComDetalhe(produto as ApiObject, detalhe as ApiObject)
         : produto
     } catch {
       return produto

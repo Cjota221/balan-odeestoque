@@ -36,29 +36,146 @@ function fmtN(v: number, dec = 1) {
 
 // ─── Normalização ─────────────────────────────────────────────────────────────
 
+type ApiObject = Record<string, unknown>
+
+function isObject(value: unknown): value is ApiObject {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+}
+
+function toNumber(value: unknown): number {
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : 0
+  }
+
+  if (typeof value === 'string') {
+    const normalized = value
+      .replace(/[^\d,.-]/g, '')
+      .replace(/\.(?=\d{3}(?:\D|$))/g, '')
+      .replace(',', '.')
+
+    const parsed = Number.parseFloat(normalized)
+    return Number.isFinite(parsed) ? parsed : 0
+  }
+
+  return 0
+}
+
+function getValue(source: ApiObject, paths: string[][]): unknown {
+  for (const path of paths) {
+    let current: unknown = source
+
+    for (const key of path) {
+      if (!isObject(current) || !(key in current)) {
+        current = undefined
+        break
+      }
+
+      current = current[key]
+    }
+
+    if (current !== undefined && current !== null && current !== '') {
+      return current
+    }
+  }
+}
+
+function getNumber(source: ApiObject, paths: string[][]) {
+  return toNumber(getValue(source, paths))
+}
+
+function getText(source: ApiObject, paths: string[][], fallback: string) {
+  const value = getValue(source, paths)
+
+  if (Array.isArray(value)) {
+    return value.filter(Boolean).join(', ') || fallback
+  }
+
+  if (isObject(value)) {
+    return getText(value, [['nome'], ['name'], ['titulo'], ['descricao']], fallback)
+  }
+
+  return value === undefined || value === null || value === '' ? fallback : String(value)
+}
+
+function getArray(source: ApiObject, paths: string[][]): ApiObject[] {
+  for (const path of paths) {
+    const value = getValue(source, [path])
+
+    if (Array.isArray(value)) {
+      return value.filter(isObject)
+    }
+  }
+
+  return []
+}
+
+function variationName(variacao: ApiObject) {
+  const parts = [
+    getText(variacao, [['nome'], ['name']], ''),
+    getText(variacao, [['cor'], ['subgrupo', 'cor']], ''),
+    getText(variacao, [['tamanho'], ['subgrupo', 'nome'], ['grupo', 'nome']], ''),
+    getText(variacao, [['sku']], '')
+  ].filter(Boolean)
+
+  return [...new Set(parts)].join(' / ') || 'Variação'
+}
+
 function normalizarProdutos(lista: unknown[]): Produto[] {
-  return (lista as Record<string, unknown>[]).map(p => {
-    const variacoes: Record<string, unknown>[] = (
-      (p.variacoes || p.variations || p.skus || p.grades || []) as Record<string, unknown>[]
-    )
-
-    const estoqueTotal = variacoes.length > 0
-      ? variacoes.reduce((s, v) => s + parseInt(String(v.estoque ?? v.stock ?? v.quantidade ?? v.qty ?? 0)), 0)
-      : parseInt(String(p.estoque ?? p.stock ?? p.quantidade ?? p.qty ?? 0))
-
-    const preco_custo = parseFloat(String(p.preco_custo ?? p.cost_price ?? p.custo ?? 0))
-    const preco_venda = parseFloat(String(p.preco_venda ?? p.price ?? p.preco ?? p.valor ?? 0))
+  return lista.filter(isObject).map(p => {
+    const variacoes = getArray(p, [['variacoes'], ['variations'], ['skus'], ['grades']])
 
     const variNorm: Variacao[] = variacoes.map(v => ({
-      nome: [v.cor, v.tamanho, v.nome, v.name, v.sku].filter(Boolean).join(' / ') || '—',
-      estoque: parseInt(String(v.estoque ?? v.stock ?? v.quantidade ?? 0))
+      nome: variationName(v),
+      estoque: getNumber(v, [
+        ['estoque', 'estoque'],
+        ['estoque', 'quantidade'],
+        ['stock', 'quantity'],
+        ['estoque'],
+        ['stock'],
+        ['quantidade'],
+        ['qty']
+      ])
     })).sort((a, b) => b.estoque - a.estoque)
 
+    const estoqueVariacoes = variNorm.reduce((s, v) => s + v.estoque, 0)
+    const estoquePrincipal = getNumber(p, [
+      ['estoque', 'estoque'],
+      ['estoque', 'quantidade'],
+      ['stock', 'quantity'],
+      ['estoque'],
+      ['stock'],
+      ['quantidade'],
+      ['qty']
+    ])
+    const estoqueTotal = estoqueVariacoes > 0 ? estoqueVariacoes : estoquePrincipal
+
+    const preco_custo = getNumber(p, [
+      ['preco_custo'],
+      ['valor_custo'],
+      ['preco_compra'],
+      ['custo'],
+      ['cost_price'],
+      ['valores', 'custo'],
+      ['precos', 'custo']
+    ])
+
+    const preco_venda = getNumber(p, [
+      ['preco_venda'],
+      ['preco'],
+      ['valor'],
+      ['price'],
+      ['sale_price'],
+      ['valores', 'preco'],
+      ['valores', 'venda'],
+      ['precos', 'venda'],
+      ['precos', 'preco']
+    ])
+
     return {
-      id: String(p.id ?? p.codigo ?? Math.random()),
-      nome: String(p.nome ?? p.name ?? p.titulo ?? 'Sem nome'),
-      sku: String(p.sku ?? p.codigo ?? p.referencia ?? '—'),
-      categoria: String(p.categoria ?? p.category ?? p.grupo ?? '—'),
+      id: getText(p, [['id'], ['codigo']], crypto.randomUUID()),
+      nome: getText(p, [['nome'], ['name'], ['titulo']], 'Sem nome'),
+      sku: getText(p, [['sku'], ['codigo'], ['referencia']], '—'),
+      categoria: getText(p, [['categoria_nome'], ['categoria'], ['category'], ['grupo'], ['categorias']], '—'),
       estoqueTotal,
       preco_custo,
       preco_venda,

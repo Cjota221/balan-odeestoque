@@ -1,5 +1,61 @@
 import { NextResponse } from 'next/server'
 
+type ApiObject = Record<string, unknown>
+
+function getProdutoId(produto: unknown) {
+  if (!produto || typeof produto !== 'object') {
+    return null
+  }
+
+  const id = (produto as ApiObject).id
+  return typeof id === 'string' || typeof id === 'number' ? String(id) : null
+}
+
+async function fetchFacilZapJson(url: URL, token: string) {
+  const resp = await fetch(url, {
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      'Accept': 'application/json',
+      'Content-Type': 'application/json'
+    },
+    signal: AbortSignal.timeout(20000)
+  })
+
+  const data = await resp.json()
+  return { resp, data }
+}
+
+async function carregarDetalhesProdutos(produtos: unknown[], token: string) {
+  const detalhes = await Promise.all(produtos.map(async produto => {
+    const id = getProdutoId(produto)
+
+    if (!id) {
+      return produto
+    }
+
+    try {
+      const url = new URL(`https://api.facilzap.app.br/produtos/${id}`)
+      const { resp, data } = await fetchFacilZapJson(url, token)
+
+      if (!resp.ok) {
+        return produto
+      }
+
+      const detalhe = data && typeof data === 'object' && 'data' in data
+        ? (data as ApiObject).data
+        : data
+
+      return detalhe && typeof detalhe === 'object'
+        ? { ...(produto as ApiObject), ...(detalhe as ApiObject) }
+        : produto
+    } catch {
+      return produto
+    }
+  }))
+
+  return detalhes
+}
+
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url)
   const page  = searchParams.get('page')  || '1'
@@ -19,16 +75,17 @@ export async function GET(req: Request) {
     url.searchParams.set('page', page)
     url.searchParams.set('length', length)
 
-    const resp = await fetch(url, {
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Accept': 'application/json',
-        'Content-Type': 'application/json'
-      },
-      signal: AbortSignal.timeout(20000)
-    })
+    const { resp, data } = await fetchFacilZapJson(url, token)
 
-    const data = await resp.json()
+    if (!resp.ok) {
+      return NextResponse.json(data, { status: resp.status })
+    }
+
+    if (data && typeof data === 'object' && Array.isArray((data as ApiObject).data)) {
+      const produtos = await carregarDetalhesProdutos((data as ApiObject).data as unknown[], token)
+      return NextResponse.json({ ...(data as ApiObject), data: produtos }, { status: resp.status })
+    }
+
     return NextResponse.json(data, { status: resp.status })
   } catch (e: unknown) {
     const message = e instanceof Error ? e.message : 'Erro desconhecido'

@@ -3,20 +3,22 @@ import { NextResponse } from 'next/server'
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url)
   const page  = searchParams.get('page')  || '1'
-  const limit = searchParams.get('limit') || '100'
+  const length = searchParams.get('length') || searchParams.get('limit') || '100'
 
-  const token   = process.env.FACILZAP_API_TOKEN
-  const empresa = process.env.FACILZAP_EMPRESA
+  const token = process.env.FACILZAP_API_TOKEN
 
-  if (!token || !empresa) {
+  if (!token) {
     return NextResponse.json(
-      { error: true, message: 'FACILZAP_API_TOKEN ou FACILZAP_EMPRESA não configurados nas variáveis de ambiente.' },
+      { error: true, message: 'FACILZAP_API_TOKEN não configurado nas variáveis de ambiente.' },
       { status: 500 }
     )
   }
 
   try {
-    const url = `https://api.facilzap.com.br/v1/${empresa}/produtos?page=${page}&limit=${limit}`
+    const url = new URL('https://api.facilzap.app.br/produtos')
+    url.searchParams.set('page', page)
+    url.searchParams.set('length', length)
+
     const resp = await fetch(url, {
       headers: {
         'Authorization': `Bearer ${token}`,

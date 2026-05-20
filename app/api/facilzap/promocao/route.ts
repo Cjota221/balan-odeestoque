@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server'
 
 type PromocaoItem = {
   id: string
+  nome?: string
+  sku?: string
   catalogoId: number
   precoPromocional: number
   variacoes?: Array<{
@@ -118,6 +120,8 @@ export async function POST(req: Request) {
 
       resultados.push({
         id: item.id,
+        nome: item.nome || '',
+        sku: item.sku || '',
         ok: resp.ok,
         status: resp.status,
         message: data?.message || (resp.ok ? 'Produto atualizado.' : 'Falha ao atualizar produto.')
@@ -125,6 +129,8 @@ export async function POST(req: Request) {
     } catch (e: unknown) {
       resultados.push({
         id: item.id,
+        nome: item.nome || '',
+        sku: item.sku || '',
         ok: false,
         status: 0,
         message: e instanceof Error ? e.message : 'Erro desconhecido'

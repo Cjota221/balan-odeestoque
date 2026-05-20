@@ -30,6 +30,19 @@ interface Produto {
 type OrdemColuna = 'estoque' | 'preco_venda' | 'lucro' | 'lucro_total' | 'margem'
 type DirecaoOrdem = 'asc' | 'desc'
 type FiltroProdutos = 'todos' | 'ativos_estoque' | 'desativados_estoque' | 'zerados' | 'sem_preco'
+type ResultadoPromocaoItem = {
+  id: string
+  nome: string
+  sku: string
+  ok: boolean
+  status: number
+  message: string
+}
+type ResultadoPromocao = {
+  atualizados: number
+  falhas: number
+  resultados: ResultadoPromocaoItem[]
+}
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -402,6 +415,7 @@ export default function Home() {
   const [confirmarPromocao, setConfirmarPromocao] = useState(false)
   const [aplicandoPromocao, setAplicandoPromocao] = useState(false)
   const [resultadoPromocao, setResultadoPromocao] = useState('')
+  const [relatorioPromocao, setRelatorioPromocao] = useState<ResultadoPromocao | null>(null)
 
   const filtrado = useMemo(
     () => filtrarProdutos(produtos, busca, filtroProdutos),
@@ -657,6 +671,7 @@ export default function Home() {
 
     setAplicandoPromocao(true)
     setResultadoPromocao('')
+    setRelatorioPromocao(null)
 
     try {
       const resp = await fetch('/api/facilzap/promocao', {
@@ -665,6 +680,8 @@ export default function Home() {
         body: JSON.stringify({
           itens: promocaoPreparada.elegiveis.map(p => ({
             id: p.id,
+            nome: p.nome,
+            sku: p.sku,
             catalogoId: p.catalogoId,
             precoPromocional: p.precoPromocional,
             variacoes: p.variacoes,
@@ -681,6 +698,7 @@ export default function Home() {
       }
 
       setResultadoPromocao(`Promoção aplicada em ${data.atualizados} produtos. Falhas: ${data.falhas}.`)
+      setRelatorioPromocao(data)
       setConfirmarPromocao(false)
     } catch (e: unknown) {
       setResultadoPromocao(e instanceof Error ? e.message : 'Erro desconhecido')
@@ -962,6 +980,65 @@ export default function Home() {
           {resultadoPromocao && (
             <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
               {resultadoPromocao}
+            </div>
+          )}
+
+          {relatorioPromocao && (
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4">
+                <h3 className="font-semibold text-emerald-800">
+                  Aplicados ({relatorioPromocao.atualizados})
+                </h3>
+                <div className="mt-3 max-h-72 overflow-auto rounded-lg border border-emerald-200 bg-white">
+                  <table className="w-full text-sm">
+                    <tbody>
+                      {relatorioPromocao.resultados.filter(r => r.ok).map(r => (
+                        <tr key={r.id} className="border-t first:border-t-0 border-emerald-100">
+                          <td className="px-3 py-2">
+                            <div className="font-medium text-slate-950">{r.nome || `Produto ${r.id}`}</div>
+                            <div className="text-xs text-slate-500">{r.sku || r.id}</div>
+                          </td>
+                          <td className="px-3 py-2 text-right text-emerald-700">OK</td>
+                        </tr>
+                      ))}
+                      {relatorioPromocao.atualizados === 0 && (
+                        <tr>
+                          <td className="px-3 py-3 text-slate-500">Nenhum produto aplicado.</td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-red-200 bg-red-50 p-4">
+                <h3 className="font-semibold text-red-800">
+                  Não aplicados ({relatorioPromocao.falhas})
+                </h3>
+                <div className="mt-3 max-h-72 overflow-auto rounded-lg border border-red-200 bg-white">
+                  <table className="w-full text-sm">
+                    <tbody>
+                      {relatorioPromocao.resultados.filter(r => !r.ok).map(r => (
+                        <tr key={r.id} className="border-t first:border-t-0 border-red-100">
+                          <td className="px-3 py-2">
+                            <div className="font-medium text-slate-950">{r.nome || `Produto ${r.id}`}</div>
+                            <div className="text-xs text-slate-500">{r.sku || r.id}</div>
+                          </td>
+                          <td className="px-3 py-2 text-right">
+                            <div className="font-semibold text-red-700">{r.status || 'Erro'}</div>
+                            <div className="text-xs text-red-600">{r.message}</div>
+                          </td>
+                        </tr>
+                      ))}
+                      {relatorioPromocao.falhas === 0 && (
+                        <tr>
+                          <td className="px-3 py-3 text-slate-500">Nenhuma falha retornada.</td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
             </div>
           )}
         </div>

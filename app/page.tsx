@@ -40,6 +40,10 @@ function fmtN(v: number, dec = 1) {
   return v.toLocaleString('pt-BR', { minimumFractionDigits: dec, maximumFractionDigits: dec })
 }
 
+function fmtEstoque(v: number) {
+  return v === -1 ? 'Ilimitado' : v.toLocaleString('pt-BR')
+}
+
 // ─── Normalização ─────────────────────────────────────────────────────────────
 
 type ApiObject = Record<string, unknown>
@@ -153,6 +157,69 @@ function getArray(source: ApiObject, paths: string[][]): ApiObject[] {
   return []
 }
 
+function getCatalogPrices(produto: ApiObject) {
+  const catalogos = getArray(produto, [['catalogos']])
+  const precos = catalogos
+    .map(catalogo => getValue(catalogo, [['precos']]))
+    .find(isObject)
+
+  if (!precos) {
+    return { preco: 0, promocional: 0 }
+  }
+
+  return {
+    preco: getPositiveNumber(precos, [['preco'], ['valor'], ['price']]),
+    promocional: getPositiveNumber(precos, [['preco_promocional'], ['promocional'], ['promotion_price'], ['sale_price']])
+  }
+}
+
+function extractPrice(produto: ApiObject, variacoes: ApiObject[]) {
+  const catalogPrice = getCatalogPrices(produto)
+
+  if (catalogPrice.promocional > 0) {
+    return catalogPrice.promocional
+  }
+
+  if (catalogPrice.preco > 0) {
+    return catalogPrice.preco
+  }
+
+  const directPrice = getPositiveNumber(produto, [
+    ['preco_venda'],
+    ['preco'],
+    ['valor_venda'],
+    ['valor'],
+    ['price'],
+    ['sale_price'],
+    ['preco_promocional'],
+    ['valores', 'preco'],
+    ['valores', 'venda'],
+    ['valores', 'valor'],
+    ['precos', 'venda'],
+    ['precos', 'preco']
+  ])
+
+  if (directPrice > 0) {
+    return directPrice
+  }
+
+  const primeiraVariacao = variacoes[0]
+
+  if (!primeiraVariacao) {
+    return 0
+  }
+
+  return getPositiveNumber(primeiraVariacao, [
+    ['preco'],
+    ['valor'],
+    ['preco_venda'],
+    ['price'],
+    ['sale_price'],
+    ['valores', 'preco'],
+    ['precos', 'preco']
+  ])
+}
+
 function variationName(variacao: ApiObject) {
   const parts = [
     getText(variacao, [['nome'], ['name']], ''),
@@ -182,7 +249,8 @@ function normalizarProdutos(lista: unknown[]): Produto[] {
     })).sort((a, b) => b.estoque - a.estoque)
 
     const estoqueVariacoes = variNorm.reduce((s, v) => s + v.estoque, 0)
-    const estoquePrincipal = getNumber(p, [
+    const controlaEstoque = getValue(p, [['estoque', 'controlar_estoque']])
+    const estoquePrincipal = controlaEstoque === false ? -1 : getNumber(p, [
       ['estoque', 'estoque'],
       ['estoque', 'quantidade'],
       ['stock', 'quantity'],
@@ -203,20 +271,7 @@ function normalizarProdutos(lista: unknown[]): Produto[] {
       ['precos', 'custo']
     ])
 
-    const preco_venda = getPositiveNumber(p, [
-      ['preco_venda'],
-      ['preco'],
-      ['valor_venda'],
-      ['valor'],
-      ['price'],
-      ['sale_price'],
-      ['preco_promocional'],
-      ['valores', 'preco'],
-      ['valores', 'venda'],
-      ['valores', 'valor'],
-      ['precos', 'venda'],
-      ['precos', 'preco']
-    ])
+    const preco_venda = extractPrice(p, variacoes)
 
     return {
       id: getText(p, [['id'], ['codigo']], crypto.randomUUID()),
@@ -334,23 +389,23 @@ export default function Home() {
 
   const metricas = useMemo(() => {
     const totalProdutos = produtos.length
-    const totalUnidades = produtos.reduce((s, p) => s + p.estoqueTotal, 0)
-    const valorEstoque  = produtos.reduce((s, p) => s + p.valor_parado, 0)
+    const totalUnidades = produtos.reduce((s, p) => s + Math.max(0, p.estoqueTotal), 0)
+    const valorEstoque  = produtos.reduce((s, p) => s + (p.estoqueTotal > 0 ? p.valor_parado : 0), 0)
     const zerados       = produtos.filter(p => p.estoqueTotal === 0).length
-    const comEstoque    = produtos.filter(p => p.estoqueTotal > 0)
+    const comEstoque    = produtos.filter(p => p.estoqueTotal !== 0)
     const ativosComEstoque = comEstoque.filter(p => p.ativado).length
     const desativadosComEstoque = comEstoque.filter(p => !p.ativado).length
-    const produtosSemPreco = produtos.filter(p => p.estoqueTotal > 0 && p.preco_venda <= 0).length
+    const produtosSemPreco = produtos.filter(p => p.estoqueTotal !== 0 && p.preco_venda <= 0).length
     const produtosComPreco = produtos.filter(p => p.precoInformado)
 
     const faturamentoTotal = produtosComPreco.reduce((s, p) => {
       const precoPromo = p.preco_venda * (1 - desconto / 100)
-      return s + p.estoqueTotal * precoPromo
+      return s + Math.max(0, p.estoqueTotal) * precoPromo
     }, 0)
 
     const lucroTotal = produtosComPreco.reduce((s, p) => {
       const precoPromo = p.preco_venda * (1 - desconto / 100)
-      return s + p.estoqueTotal * (precoPromo - custoTotal)
+      return s + Math.max(0, p.estoqueTotal) * (precoPromo - custoTotal)
     }, 0)
 
     const precoMedio     = produtosComPreco.length > 0 ? produtosComPreco.reduce((s, p) => s + p.preco_venda, 0) / produtosComPreco.length : 0
@@ -382,7 +437,7 @@ export default function Home() {
       const precoPromo  = p.preco_venda * (1 - desconto / 100)
       const lucro       = precoPromo - custoTotal
       const margem      = precoPromo > 0 ? (lucro / precoPromo * 100) : 0
-      const lucroTotalP = p.estoqueTotal * lucro
+      const lucroTotalP = Math.max(0, p.estoqueTotal) * lucro
       return { ...p, precoPromo, lucro, margem, lucroTotalP }
     })
 
@@ -426,7 +481,7 @@ export default function Home() {
   }
 
   function statusProduto(produto: Produto) {
-    if (produto.estoqueTotal <= 0) {
+    if (produto.estoqueTotal === 0) {
       return {
         label: 'Sem estoque',
         className: 'bg-slate-100 text-slate-600 border-slate-200'
@@ -461,7 +516,7 @@ export default function Home() {
       p.sku,
       p.categoria,
       statusProduto(p).label,
-      p.estoqueTotal,
+      fmtEstoque(p.estoqueTotal),
       p.precoInformado ? p.preco_venda.toFixed(2).replace('.', ',') : '',
       p.precoInformado ? p.precoPromo.toFixed(2).replace('.', ',') : '',
       p.precoInformado ? p.lucro.toFixed(2).replace('.', ',') : '',
@@ -746,7 +801,7 @@ export default function Home() {
                 {produtosOrdenados.map((p, i) => (
                   <Fragment key={p.id}>
                     <tr
-                      className={`border-t border-slate-200 transition-colors cursor-pointer ${p.estoqueTotal > 0 && !p.ativado ? 'bg-red-50 hover:bg-red-100' : corLinha(p.margem)}`}
+                      className={`border-t border-slate-200 transition-colors cursor-pointer ${p.estoqueTotal !== 0 && !p.ativado ? 'bg-red-50 hover:bg-red-100' : corLinha(p.margem)}`}
                       onClick={() => setExpandido(expandido === p.id ? null : p.id)}
                     >
                       <td className="px-3 py-2.5 text-slate-500 text-xs">{i + 1}</td>
@@ -761,7 +816,7 @@ export default function Home() {
                       </td>
                       <td className="px-3 py-2.5 text-right">
                         <span className={p.estoqueTotal === 0 ? 'text-red-600 font-semibold' : 'text-slate-950'}>
-                          {p.estoqueTotal}
+                          {fmtEstoque(p.estoqueTotal)}
                         </span>
                       </td>
                       <td className={`px-3 py-2.5 text-right ${p.precoInformado ? 'text-slate-700' : 'text-amber-700 text-xs font-semibold'}`}>

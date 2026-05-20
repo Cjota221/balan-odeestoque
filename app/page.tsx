@@ -15,6 +15,8 @@ interface Produto {
   sku: string
   categoria: string
   ativado: boolean
+  tipoRegraPreco: string
+  catalogoId: number
   estoqueTotal: number
   preco_custo: number
   preco_venda: number
@@ -173,6 +175,14 @@ function getCatalogPrices(produto: ApiObject) {
   }
 }
 
+function getCatalogoId(produto: ApiObject) {
+  const catalogos = getArray(produto, [['catalogos']])
+  const id = catalogos[0]?.id
+  const parsed = toNumber(id)
+
+  return Number.isFinite(parsed) ? parsed : 0
+}
+
 function extractPrice(produto: ApiObject, variacoes: ApiObject[]) {
   const catalogPrice = getCatalogPrices(produto)
 
@@ -279,6 +289,8 @@ function normalizarProdutos(lista: unknown[]): Produto[] {
       sku: getText(p, [['sku'], ['codigo'], ['referencia']], '—'),
       categoria: getText(p, [['categoria_nome'], ['categoria'], ['category'], ['grupo'], ['categorias']], '—'),
       ativado: getBoolean(p, [['ativado'], ['ativo'], ['active'], ['enabled'], ['status']], false),
+      tipoRegraPreco: getText(p, [['tipo_regra_preco']], 'geral'),
+      catalogoId: getCatalogoId(p),
       estoqueTotal,
       preco_custo,
       preco_venda,
@@ -321,6 +333,12 @@ function EmptyInventoryIcon() {
   )
 }
 
+function isoDateFromNow(days: number) {
+  const date = new Date()
+  date.setDate(date.getDate() + days)
+  return date.toISOString().slice(0, 10)
+}
+
 // ─── Componente principal ─────────────────────────────────────────────────────
 
 export default function Home() {
@@ -336,6 +354,11 @@ export default function Home() {
   const [ordem, setOrdem]                   = useState<OrdemColuna>('estoque')
   const [direcao, setDirecao]               = useState<DirecaoOrdem>('desc')
   const [expandido, setExpandido]           = useState<string | null>(null)
+  const [dataInicioPromo, setDataInicioPromo] = useState(isoDateFromNow(0))
+  const [dataTerminoPromo, setDataTerminoPromo] = useState(isoDateFromNow(7))
+  const [confirmarPromocao, setConfirmarPromocao] = useState(false)
+  const [aplicandoPromocao, setAplicandoPromocao] = useState(false)
+  const [resultadoPromocao, setResultadoPromocao] = useState('')
 
   const filtrado = useMemo(() => filtrarProdutos(produtos, busca), [produtos, busca])
 
@@ -455,6 +478,33 @@ export default function Home() {
     return lista
   }, [filtrado, desconto, custoTotal, ordem, direcao])
 
+  const promocaoPreparada = useMemo(() => {
+    const elegiveis = produtos
+      .filter(p => p.ativado && p.estoqueTotal !== 0 && p.precoInformado && p.tipoRegraPreco !== 'variacao')
+      .map(p => ({
+        id: p.id,
+        nome: p.nome,
+        sku: p.sku,
+        estoque: p.estoqueTotal,
+        catalogoId: p.catalogoId,
+        precoAtual: p.preco_venda,
+        precoPromocional: Number((p.preco_venda * (1 - desconto / 100)).toFixed(2))
+      }))
+      .filter(p => p.precoPromocional > 0)
+
+    const comPrecoPorVariacao = produtos.filter(p =>
+      p.ativado && p.estoqueTotal !== 0 && p.precoInformado && p.tipoRegraPreco === 'variacao'
+    ).length
+
+    const semPreco = produtos.filter(p =>
+      p.ativado && p.estoqueTotal !== 0 && !p.precoInformado
+    ).length
+
+    const desativadosComEstoque = produtos.filter(p => !p.ativado && p.estoqueTotal !== 0).length
+
+    return { elegiveis, comPrecoPorVariacao, semPreco, desativadosComEstoque }
+  }, [produtos, desconto])
+
   // ─── Ordenação ────────────────────────────────────────────────────────────
 
   function alterarOrdem(col: OrdemColuna) {
@@ -533,6 +583,52 @@ export default function Home() {
     a.href = URL.createObjectURL(blob)
     a.download = `balanco_promo${desconto}pct_${new Date().toISOString().slice(0, 10)}.csv`
     a.click()
+  }
+
+  async function aplicarPromocao() {
+    if (!confirmarPromocao || promocaoPreparada.elegiveis.length === 0) {
+      return
+    }
+
+    const ok = window.confirm(
+      `Aplicar ${desconto}% OFF em ${promocaoPreparada.elegiveis.length} produtos ativados com estoque?`
+    )
+
+    if (!ok) {
+      return
+    }
+
+    setAplicandoPromocao(true)
+    setResultadoPromocao('')
+
+    try {
+      const resp = await fetch('/api/facilzap/promocao', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          itens: promocaoPreparada.elegiveis.map(p => ({
+            id: p.id,
+            catalogoId: p.catalogoId,
+            precoPromocional: p.precoPromocional,
+            dataInicio: dataInicioPromo || undefined,
+            dataTermino: dataTerminoPromo || undefined
+          }))
+        })
+      })
+
+      const data = await resp.json()
+
+      if (!resp.ok || data.error) {
+        throw new Error(data.message || 'Não foi possível aplicar a promoção.')
+      }
+
+      setResultadoPromocao(`Promoção aplicada em ${data.atualizados} produtos. Falhas: ${data.falhas}.`)
+      setConfirmarPromocao(false)
+    } catch (e: unknown) {
+      setResultadoPromocao(e instanceof Error ? e.message : 'Erro desconhecido')
+    } finally {
+      setAplicandoPromocao(false)
+    }
   }
 
   // ─── Alerta de margem ─────────────────────────────────────────────────────
@@ -697,6 +793,117 @@ export default function Home() {
           </div>
         )}
       </div>
+
+      {temDados && (
+        <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm space-y-5">
+          <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4">
+            <div>
+              <h2 className="font-semibold text-lg">Aplicar Promoção na FácilZap</h2>
+              <p className="text-sm text-slate-500 mt-1">
+                Altera somente produtos ativados, com estoque e com preço geral informado.
+              </p>
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-center">
+              <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3">
+                <p className="text-xs text-emerald-700">Prontos</p>
+                <p className="text-xl font-bold text-emerald-700">{promocaoPreparada.elegiveis.length}</p>
+              </div>
+              <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+                <p className="text-xs text-slate-600">Preço por variação</p>
+                <p className="text-xl font-bold text-slate-700">{promocaoPreparada.comPrecoPorVariacao}</p>
+              </div>
+              <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
+                <p className="text-xs text-amber-700">Sem preço</p>
+                <p className="text-xl font-bold text-amber-700">{promocaoPreparada.semPreco}</p>
+              </div>
+              <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3">
+                <p className="text-xs text-red-700">Desativados</p>
+                <p className="text-xl font-bold text-red-700">{promocaoPreparada.desativadosComEstoque}</p>
+              </div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <label className="block">
+              <span className="block text-slate-500 text-xs mb-1.5">Início da promoção</span>
+              <input
+                type="date"
+                value={dataInicioPromo}
+                onChange={e => setDataInicioPromo(e.target.value)}
+                className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-slate-950 focus:outline-none focus:border-[#ed0b8c] focus:bg-white"
+              />
+            </label>
+            <label className="block">
+              <span className="block text-slate-500 text-xs mb-1.5">Término da promoção</span>
+              <input
+                type="date"
+                value={dataTerminoPromo}
+                onChange={e => setDataTerminoPromo(e.target.value)}
+                className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-slate-950 focus:outline-none focus:border-[#ed0b8c] focus:bg-white"
+              />
+            </label>
+          </div>
+
+          {promocaoPreparada.elegiveis.length > 0 && (
+            <div className="overflow-x-auto rounded-xl border border-slate-200">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="bg-slate-100 text-slate-600 text-xs uppercase tracking-wide">
+                    <th className="px-3 py-3 text-left">Produto</th>
+                    <th className="px-3 py-3 text-right">Estoque</th>
+                    <th className="px-3 py-3 text-right">Preço atual</th>
+                    <th className="px-3 py-3 text-right">Preço promocional</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {promocaoPreparada.elegiveis.slice(0, 8).map(p => (
+                    <tr key={p.id} className="border-t border-slate-200">
+                      <td className="px-3 py-2.5">
+                        <div className="font-medium text-slate-950">{p.nome}</div>
+                        <div className="text-xs text-slate-500">{p.sku}</div>
+                      </td>
+                      <td className="px-3 py-2.5 text-right">{fmtEstoque(p.estoque)}</td>
+                      <td className="px-3 py-2.5 text-right">{fmt(p.precoAtual)}</td>
+                      <td className="px-3 py-2.5 text-right font-semibold text-[#ed0b8c]">{fmt(p.precoPromocional)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {promocaoPreparada.elegiveis.length > 8 && (
+                <p className="px-3 py-2 text-xs text-slate-500">
+                  Prévia exibindo 8 de {promocaoPreparada.elegiveis.length} produtos.
+                </p>
+              )}
+            </div>
+          )}
+
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+            <label className="flex items-center gap-2 text-sm text-slate-700">
+              <input
+                type="checkbox"
+                checked={confirmarPromocao}
+                onChange={e => setConfirmarPromocao(e.target.checked)}
+                className="h-4 w-4 accent-[#ed0b8c]"
+              />
+              Confirmo que quero alterar os preços promocionais na FácilZap.
+            </label>
+            <button
+              onClick={aplicarPromocao}
+              disabled={!confirmarPromocao || aplicandoPromocao || promocaoPreparada.elegiveis.length === 0}
+              className="px-5 py-2.5 rounded-lg font-semibold text-white transition-opacity disabled:opacity-40"
+              style={{ backgroundColor: '#ed0b8c' }}
+            >
+              {aplicandoPromocao ? 'Aplicando...' : 'Aplicar promoção'}
+            </button>
+          </div>
+
+          {resultadoPromocao && (
+            <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
+              {resultadoPromocao}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* ── Cards gerais ── */}
       {temDados && (

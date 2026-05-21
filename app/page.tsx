@@ -248,12 +248,12 @@ function getCatalogoId(produto: ApiObject) {
 function extractPrice(produto: ApiObject, variacoes: ApiObject[]) {
   const catalogPrice = getCatalogPrices(produto)
 
-  if (catalogPrice.promocional > 0) {
-    return catalogPrice.promocional
-  }
-
   if (catalogPrice.preco > 0) {
     return catalogPrice.preco
+  }
+
+  if (catalogPrice.promocional > 0) {
+    return catalogPrice.promocional
   }
 
   const directPrice = getPositiveNumber(produto, [
@@ -479,7 +479,9 @@ export default function Home() {
   const [dataInicioPromo, setDataInicioPromo] = useState(isoDateFromNow(0))
   const [dataTerminoPromo, setDataTerminoPromo] = useState(isoDateFromNow(7))
   const [confirmarPromocao, setConfirmarPromocao] = useState(false)
+  const [confirmarRemoverPromocao, setConfirmarRemoverPromocao] = useState(false)
   const [aplicandoPromocao, setAplicandoPromocao] = useState(false)
+  const [removendoPromocao, setRemovendoPromocao] = useState(false)
   const [resultadoPromocao, setResultadoPromocao] = useState('')
   const [relatorioPromocao, setRelatorioPromocao] = useState<ResultadoPromocao | null>(null)
 
@@ -645,10 +647,29 @@ export default function Home() {
 
     const desativadosComEstoque = produtos.filter(p => !p.ativado && p.estoqueTotal !== 0).length
     const comPromocao = produtos.filter(p => p.ativado && p.estoqueTotal !== 0 && p.temPromocao).length
+    const removiveis = produtos
+      .filter(p => p.ativado && p.estoqueTotal !== 0 && p.precoInformado && p.temPromocao)
+      .map(p => ({
+        id: p.id,
+        nome: p.nome,
+        sku: p.sku,
+        catalogoId: p.catalogoId,
+        tipoRegraPreco: p.tipoRegraPreco,
+        precoAtual: p.preco_venda,
+        variacoes: p.tipoRegraPreco === 'variacao'
+          ? p.variacoes
+              .filter(v => v.id > 0)
+              .map(v => ({
+                id: v.id,
+                precoAtual: Number((v.preco > 0 ? v.preco : p.preco_venda).toFixed(2))
+              }))
+          : []
+      }))
+      .filter(p => p.precoAtual > 0 && (p.tipoRegraPreco !== 'variacao' || p.variacoes.length > 0))
 
     const aplicaveisPorVariacao = elegiveis.filter(p => p.tipoRegraPreco === 'variacao').length
 
-    return { elegiveis, comPrecoPorVariacao, aplicaveisPorVariacao, semPreco, desativadosComEstoque, comPromocao }
+    return { elegiveis, removiveis, comPrecoPorVariacao, aplicaveisPorVariacao, semPreco, desativadosComEstoque, comPromocao }
   }, [produtos, desconto])
 
   // ─── Ordenação ────────────────────────────────────────────────────────────
@@ -807,6 +828,67 @@ export default function Home() {
       setResultadoPromocao(e instanceof Error ? e.message : 'Erro desconhecido')
     } finally {
       setAplicandoPromocao(false)
+    }
+  }
+
+  async function removerPromocoes() {
+    if (!confirmarRemoverPromocao || promocaoPreparada.removiveis.length === 0) {
+      return
+    }
+
+    const ok = window.confirm(
+      `Remover promoÃ§Ã£o de ${promocaoPreparada.removiveis.length} produtos e voltar ao preÃ§o normal?`
+    )
+
+    if (!ok) {
+      return
+    }
+
+    setRemovendoPromocao(true)
+    setResultadoPromocao('')
+    setRelatorioPromocao(null)
+
+    try {
+      const lotes = chunkArray(promocaoPreparada.removiveis, 5)
+      const acumulado: ResultadoPromocao = { atualizados: 0, falhas: 0, resultados: [] }
+
+      for (let i = 0; i < lotes.length; i++) {
+        const lote = lotes[i]
+        setResultadoPromocao(`Removendo promoÃ§Ã£o do lote ${i + 1} de ${lotes.length} (${acumulado.atualizados} removidos atÃ© agora).`)
+
+        const resp = await fetch('/api/facilzap/promocao/remover', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ itens: lote })
+        })
+
+        const data = await resp.json().catch(() => null)
+
+        if (!resp.ok || data?.error) {
+          const message = data?.message || 'NÃ£o foi possÃ­vel remover este lote.'
+          acumulado.resultados.push(...lote.map(item => ({
+            id: item.id,
+            nome: item.nome,
+            sku: item.sku,
+            ok: false,
+            status: resp.status,
+            message
+          })))
+        } else {
+          acumulado.resultados.push(...(Array.isArray(data.resultados) ? data.resultados : []))
+        }
+
+        acumulado.atualizados = acumulado.resultados.filter(r => r.ok).length
+        acumulado.falhas = acumulado.resultados.length - acumulado.atualizados
+        setRelatorioPromocao({ ...acumulado, resultados: [...acumulado.resultados] })
+      }
+
+      setResultadoPromocao(`PromoÃ§Ã£o removida de ${acumulado.atualizados} produtos. Falhas: ${acumulado.falhas}.`)
+      setConfirmarRemoverPromocao(false)
+    } catch (e: unknown) {
+      setResultadoPromocao(e instanceof Error ? e.message : 'Erro desconhecido')
+    } finally {
+      setRemovendoPromocao(false)
     }
   }
 
@@ -1090,13 +1172,70 @@ export default function Home() {
             </label>
             <button
               onClick={aplicarPromocao}
-              disabled={!confirmarPromocao || aplicandoPromocao || promocaoPreparada.elegiveis.length === 0}
+              disabled={!confirmarPromocao || aplicandoPromocao || removendoPromocao || promocaoPreparada.elegiveis.length === 0}
               className="px-5 py-2.5 rounded-lg font-semibold text-white transition-opacity disabled:opacity-40"
               style={{ backgroundColor: '#ed0b8c' }}
             >
               {aplicandoPromocao ? 'Aplicando...' : 'Aplicar promoção'}
             </button>
           </div>
+
+          <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+            <div>
+              <h3 className="font-semibold text-slate-950">Voltar aos preÃ§os normais</h3>
+              <p className="text-sm text-slate-500 mt-1">
+                Remove o preÃ§o promocional de {promocaoPreparada.removiveis.length} produtos ativados e mantÃ©m o preÃ§o cheio cadastrado.
+              </p>
+            </div>
+            <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+              <label className="flex items-center gap-2 text-sm text-slate-700">
+                <input
+                  type="checkbox"
+                  checked={confirmarRemoverPromocao}
+                  onChange={e => setConfirmarRemoverPromocao(e.target.checked)}
+                  disabled={promocaoPreparada.removiveis.length === 0}
+                  className="h-4 w-4 accent-red-600 disabled:opacity-40"
+                />
+                Confirmo que quero remover as promoÃ§Ãµes.
+              </label>
+              <button
+                onClick={removerPromocoes}
+                disabled={!confirmarRemoverPromocao || aplicandoPromocao || removendoPromocao || promocaoPreparada.removiveis.length === 0}
+                className="px-5 py-2.5 rounded-lg bg-red-600 font-semibold text-white transition-opacity hover:bg-red-700 disabled:opacity-40"
+              >
+                {removendoPromocao ? 'Removendo...' : 'Remover promoÃ§Ãµes'}
+              </button>
+            </div>
+          </div>
+
+          {false && (
+            <Fragment>
+              <div>
+                <h3 className="font-semibold text-slate-950">Voltar aos preÃ§os normais</h3>
+                <p className="text-sm text-slate-500 mt-1">
+                  Remove o preÃ§o promocional de {promocaoPreparada.removiveis.length} produtos ativados e mantÃ©m o preÃ§o cheio cadastrado.
+                </p>
+              </div>
+              <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+                <label className="flex items-center gap-2 text-sm text-slate-700">
+                  <input
+                    type="checkbox"
+                    checked={confirmarRemoverPromocao}
+                    onChange={e => setConfirmarRemoverPromocao(e.target.checked)}
+                    className="h-4 w-4 accent-red-600"
+                  />
+                  Confirmo que quero remover as promoÃ§Ãµes.
+                </label>
+                <button
+                  onClick={removerPromocoes}
+                  disabled={!confirmarRemoverPromocao || aplicandoPromocao || removendoPromocao}
+                  className="px-5 py-2.5 rounded-lg bg-red-600 font-semibold text-white transition-opacity hover:bg-red-700 disabled:opacity-40"
+                >
+                  {removendoPromocao ? 'Removendo...' : 'Remover promoÃ§Ãµes'}
+                </button>
+              </div>
+            </Fragment>
+          )}
 
           {resultadoPromocao && (
             <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
